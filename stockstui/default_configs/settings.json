@@ -1,6 +1,7 @@
 {
     "theme": "gruvbox_soft_dark",
     "default_tab_category": "stocks",
+    "enable_pre_post_market": false,
     "auto_refresh": false,
     "refresh_interval": 300.0,
     "hidden_tabs": [
