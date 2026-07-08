@@ -1,3 +1,4 @@
+import logging
 from textual.containers import Vertical, Horizontal
 from textual.widgets import Button, DataTable, Label, ListView, ListItem, Switch
 from textual.app import ComposeResult, on
@@ -34,7 +35,7 @@ class ListsConfigView(Vertical):
             with Vertical(id="ticker-view-container"):
                 yield DataTable(id="ticker-table", zebra_stripes=True)
                 with Vertical(id="ticker-buttons-container"):
-                    yield Button("Add Ticker", id="add_ticker")
+                    yield Button("Add Ticker(s)", id="add_ticker")
                     yield Button("Edit Ticker", id="edit_ticker")
                     yield Button("Remove Ticker", id="delete_ticker", variant="error")
                     yield Button("Move Ticker Up", id="move_ticker_up")
@@ -157,19 +158,17 @@ class ListsConfigView(Vertical):
         table = self.query_one("#ticker-table", DataTable)
         table.clear()
         if self.app.active_list_category:
-            muted_color = self.app.theme_variables.get("text-muted", "dim")
             list_data = self.app.config.lists.get(self.app.active_list_category, [])
             for item in list_data:
                 ticker = item["ticker"]
-                alias = item.get("alias", ticker)
-                note_raw = item.get("note") or "N/A"
-                note_text = Text(
-                    note_raw, style=muted_color if note_raw == "N/A" else ""
-                )
-                tags_raw = item.get("tags") or "N/A"
-                tags_text = Text(
-                    tags_raw, style=muted_color if tags_raw == "N/A" else ""
-                )
+                # Display empty string if alias is not explicitly configured
+                alias = item.get("alias") or ""
+                # Display empty string for note and tags when not set; N/A was misleading
+                # because it looked like the field had been filled in
+                note_raw = item.get("note") or ""
+                note_text = Text(note_raw)
+                tags_raw = item.get("tags") or ""
+                tags_text = Text(tags_raw)
                 table.add_row(ticker, alias, note_text, tags_text, key=ticker)
 
     @on(ListView.Selected)
@@ -199,30 +198,66 @@ class ListsConfigView(Vertical):
 
     @on(Button.Pressed, "#add_ticker")
     async def on_add_ticker_pressed(self):
-        """Handles the 'Add Ticker' button press, opening a modal for new ticker details."""
+        """Handles the 'Add Ticker(s)' button press, opening a modal for new ticker details.
+
+        Supports both single-ticker and multi-ticker (comma-separated) addition.
+        In multi-ticker mode, the modal returns a list of tuples; in single-ticker mode,
+        it returns a single tuple."""
         category = self.app.active_list_category
         if not category:
             self.app.notify("Select a list first.", severity="warning")
             return
 
-        def on_close(result: tuple[str, str, str, str] | None):
-            if result:
-                ticker, alias, note, tags = result
+        def on_close(result: tuple[str, str, str, str] | list[tuple[str, str, str, str]] | None):
+            if not result:
+                return
+
+            # Normalize single-ticker result into a list for uniform processing
+            if isinstance(result, tuple):
+                entries = [result]
+            else:
+                entries = result
+
+            added = []
+            skipped = []
+            for ticker, alias, note, tags in entries:
                 if any(
                     t["ticker"].upper() == ticker.upper()
                     for t in self.app.config.lists[category]
                 ):
-                    self.app.notify(
-                        f"Ticker '{ticker}' already exists in this list.",
-                        severity="error",
-                    )
-                    return
+                    skipped.append(ticker)
+                    continue
                 self.app.config.lists[category].append(
                     {"ticker": ticker, "alias": alias, "note": note, "tags": tags}
                 )
+                added.append(ticker)
+
+            if added:
                 self.app.config.save_lists()
                 self._populate_ticker_table()
-                self.app.notify(f"Ticker '{ticker}' added.")
+
+            # Provide clear feedback about what was added and what was skipped
+            if added and not skipped:
+                if len(added) == 1:
+                    self.app.notify(f"Ticker '{added[0]}' added.")
+                else:
+                    self.app.notify(f"{len(added)} tickers added: {', '.join(added)}")
+            elif added and skipped:
+                self.app.notify(
+                    f"Added: {', '.join(added)}. Skipped (duplicates): {', '.join(skipped)}",
+                    severity="warning",
+                )
+            elif skipped:
+                if len(skipped) == 1:
+                    self.app.notify(
+                        f"Ticker '{skipped[0]}' already exists in this list.",
+                        severity="error",
+                    )
+                else:
+                    self.app.notify(
+                        f"All tickers already exist: {', '.join(skipped)}",
+                        severity="error",
+                    )
 
         self.app.push_screen(AddTickerModal(), on_close)
 
@@ -321,14 +356,20 @@ class ListsConfigView(Vertical):
     async def on_edit_ticker_pressed(self):
         """Handles the 'Edit Ticker' button press, opening a modal to edit ticker details."""
         table = self.query_one("#ticker-table", DataTable)
-        if not self.app.active_list_category or table.cursor_row < 0:
+        # Retrieve the original configuration values directly from self.app.config.lists
+        # instead of scraping from the table. The table cells might display formatted/fallback
+        # values (like the ticker symbol as the alias, or "N/A" for empty notes), which
+        # we do not want to autofill in the Edit dialog.
+        list_data = self.app.config.lists.get(self.app.active_list_category, [])
+        if table.cursor_row < 0 or table.cursor_row >= len(list_data):
             self.app.notify("Select a ticker to edit.", severity="warning")
             return
 
-        original_ticker = extract_cell_text(table.get_cell_at((table.cursor_row, 0)))
-        original_alias = extract_cell_text(table.get_cell_at((table.cursor_row, 1)))
-        original_note = extract_cell_text(table.get_cell_at((table.cursor_row, 2)))
-        original_tags = extract_cell_text(table.get_cell_at((table.cursor_row, 3)))
+        item = list_data[table.cursor_row]
+        original_ticker = item.get("ticker", "")
+        original_alias = item.get("alias") or ""
+        original_note = item.get("note") or ""
+        original_tags = item.get("tags") or ""
 
         def on_close(result: tuple[str, str, str, str] | None):
             if result:
@@ -471,6 +512,13 @@ class ListsConfigView(Vertical):
         self.app.config.settings["column_settings"] = columns
         self.app.config.save_settings()
 
+        # Rebuild the app's cached visible columns from the updated settings.
+        # This will update self.app._visible_columns in-place so that when the user
+        # switches back to a watchlist category, it is automatically rendered with
+        # the correct columns.
+        if hasattr(self.app, "_rebuild_visible_columns"):
+            self.app._rebuild_visible_columns()
+
     def _update_column_highlight(self):
         """Manually applies a highlight class to the currently selected column item."""
         try:
@@ -503,6 +551,10 @@ class ListsConfigView(Vertical):
             view.index = idx - 1
             self._update_column_highlight()
 
+            # Rebuild the app's cached visible columns from the updated settings.
+            if hasattr(self.app, "_rebuild_visible_columns"):
+                self.app._rebuild_visible_columns()
+
     @on(Button.Pressed, "#move_col_down")
     def on_move_col_down(self):
         view = self.query_one("#columns-list-view", ListView)
@@ -516,6 +568,10 @@ class ListsConfigView(Vertical):
             self.repopulate_columns()
             view.index = idx + 1
             self._update_column_highlight()
+
+            # Rebuild the app's cached visible columns from the updated settings.
+            if hasattr(self.app, "_rebuild_visible_columns"):
+                self.app._rebuild_visible_columns()
 
     def on_key(self, event) -> None:
         """Handles key presses for navigating between buttons."""
