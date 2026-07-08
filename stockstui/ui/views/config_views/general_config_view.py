@@ -18,6 +18,7 @@ class GeneralConfigView(Vertical):
     def compose(self) -> ComposeResult:
         """Creates the layout for the general configuration view."""
         auto_refresh = self.app.config.get_setting("auto_refresh", False)
+        enable_pre_post = self.app.config.get_setting("enable_pre_post_market", False)
         suppress_logs = self.app.config.get_setting("suppress_tui_logs", False)
 
         with Horizontal(id="top-config-container"):
@@ -60,6 +61,9 @@ class GeneralConfigView(Vertical):
                         ],
                         id="market-calendar-select",
                     )
+                with Horizontal(classes="config-option-horizontal"):
+                    yield Label("Pre/Post Market\n(slower fetch):", classes="config-label")
+                    yield Switch(value=enable_pre_post, id="enable-pre-post-market-switch")
                 with Horizontal(classes="config-option-horizontal"):
                     yield Label("Auto Refresh:", classes="config-label")
                     yield Switch(value=auto_refresh, id="auto-refresh-switch")
@@ -143,6 +147,14 @@ class GeneralConfigView(Vertical):
                 self.app.notify(error_message, severity="error", timeout=5)
             else:
                 self.app.notify("Invalid interval value.", severity="error")
+
+    @on(Switch.Changed, "#enable-pre-post-market-switch")
+    def on_enable_pre_post_market_switch_changed(self, event: Switch.Changed):
+        """Handles changes to the 'Pre/Post Market' switch."""
+        if getattr(self, "_loading", False):
+            return
+        self.app.config.settings["enable_pre_post_market"] = event.value
+        self.app.config.save_settings()
 
     @on(Switch.Changed, "#auto-refresh-switch")
     def on_switch_changed(self, event: Switch.Changed):
