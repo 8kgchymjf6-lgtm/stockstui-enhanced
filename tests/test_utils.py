@@ -36,7 +36,7 @@ async def create_test_app() -> StocksTUI:
     app.mount()
     await app.workers.wait_for_complete()
     await asyncio.sleep(0.01)
-    app.push_screen = MagicMock()
+    setattr(app, "push_screen", MagicMock())
 
     return app
 
@@ -49,14 +49,15 @@ def create_mocked_app() -> StocksTUI:
     app = StocksTUI()
 
     # Replace core components with mocks
-    app.config = MagicMock()
-    app.db_manager = MagicMock()
-    app.portfolio_manager = MagicMock()
-    app.notify = MagicMock()
-    app.bell = MagicMock()
-    app.fetch_prices = MagicMock()
-    app.fetch_news = MagicMock()
-    app.fetch_historical_data = MagicMock()
+    # Use setattr to avoid Mypy errors when mocking App attributes
+    setattr(app, "config", MagicMock())
+    setattr(app, "db_manager", MagicMock())
+    setattr(app, "portfolio_manager", MagicMock())
+    setattr(app, "notify", MagicMock())
+    setattr(app, "bell", MagicMock())
+    setattr(app, "fetch_prices", MagicMock())
+    setattr(app, "fetch_news", MagicMock())
+    setattr(app, "fetch_historical_data", MagicMock())
 
     # Test theme expectations: use gruvbox_soft_dark (as requested)
     def get_setting_side_effect(key, default=None):
@@ -66,7 +67,7 @@ def create_mocked_app() -> StocksTUI:
             return "NYSE"
         return default
 
-    app.config.get_setting.side_effect = get_setting_side_effect
+    getattr(app, "config").get_setting.side_effect = get_setting_side_effect
     app.config.lists = {"stocks": [], "crypto": [], "news": [], "debug": []}
 
     # Register a dummy theme to satisfy app requirements
@@ -124,17 +125,35 @@ class TestUtils(unittest.TestCase):
 
     def test_slugify(self):
         self.assertEqual(slugify("My List Name"), "my_list_name")
+        self.assertEqual(slugify("  Spaces  "), "spaces")
+        self.assertEqual(slugify("Multiple   Spaces"), "multiple___spaces")
+        self.assertEqual(slugify("UPPER"), "upper")
 
     def test_extract_cell_text(self):
         self.assertEqual(extract_cell_text(Text("Rich Text")), "Rich Text")
+        self.assertEqual(extract_cell_text(None), "")
+        self.assertEqual(extract_cell_text("Plain String"), "Plain String")
+        self.assertEqual(extract_cell_text(123), "123")
+        self.assertEqual(extract_cell_text("  trimmed  "), "trimmed")
 
     def test_parse_tags(self):
         self.assertEqual(parse_tags("tech, growth, value"), ["tech", "growth", "value"])
+        self.assertEqual(parse_tags("tech;growth value"), ["tech", "growth", "value"])
+        self.assertEqual(parse_tags("  "), [])
+        self.assertEqual(parse_tags(None), [])
+        self.assertEqual(parse_tags("tech, TECH, Growth"), ["tech", "growth"])
+        self.assertEqual(parse_tags("a, b, a"), ["a", "b"])
 
     def test_format_tags(self):
         self.assertEqual(format_tags(["tech", "growth"]), "tech, growth")
+        self.assertEqual(format_tags([]), "")
+        self.assertEqual(format_tags(["single"]), "single")
 
     def test_match_tags(self):
         item_tags = ["tech", "growth"]
         self.assertTrue(match_tags(item_tags, ["growth"]))
+        self.assertTrue(match_tags(item_tags, ["tech", "value"]))
         self.assertFalse(match_tags(item_tags, ["value"]))
+        self.assertTrue(match_tags(item_tags, []))
+        self.assertFalse(match_tags([], ["tech"]))
+        self.assertTrue(match_tags([], []))
