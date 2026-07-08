@@ -3,6 +3,8 @@ import json
 import logging
 from pathlib import Path
 from datetime import datetime, timezone
+from stockstui.utils import merge_price_data
+
 
 # Only load data into memory if it's less than a day old.
 CACHE_LOAD_DURATION_SECONDS = 86400  # 24 hours
@@ -32,13 +34,26 @@ class DbManager:
         self.conn = None
         try:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            # Mypy has trouble with some sqlite3.connect overloads
             self.conn = sqlite3.connect(
-                self.db_path, isolation_level="", check_same_thread=False
-            )
+                str(self.db_path), isolation_level="", check_same_thread=False
+            )  # type: ignore
+
+            # WAL (Write-Ahead Logging) mode allows concurrent readers while a writer
+            # is active, eliminating "database is locked" errors from background worker
+            # threads using check_same_thread=False. WAL is persistent on the file, so
+            # setting it on each connect is harmless and makes the intent explicit.
+            # busy_timeout tells SQLite to retry for up to 5 seconds before raising on
+            # any residual writer-vs-writer lock contention (e.g. if the OS is slow to
+            # release locks), instead of failing immediately.
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA busy_timeout=5000")
+
             self._create_tables()
             self._prune_expired_entries()
         except sqlite3.Error as e:
             logging.error(f"Database connection failed for '{self.db_path}': {e}")
+
 
     def _create_tables(self):
         """Creates the necessary tables in the database if they don't already exist."""
@@ -181,39 +196,55 @@ class DbManager:
         return loaded_data
 
     def save_price_cache_to_db(self, cache_data: dict):
-        """Saves the in-memory price cache to the database."""
+        """
+        Saves the in-memory price cache to the database, merging field-level updates
+        to preserve valid data and prevent overwriting valid cached values with None.
+        """
         if not self.conn or not cache_data:
             return
-        items_to_save = []
-        for ticker, cache_entry in cache_data.items():
-            try:
-                # FIX: Unpack the new standardized dictionary format for saving.
-                data_dict = cache_entry.get("data", {})
-                expiry_dt = cache_entry.get("expiry")
-                if data_dict and expiry_dt:
-                    items_to_save.append(
-                        (ticker, json.dumps(data_dict), expiry_dt.timestamp())
-                    )
-            except (TypeError, ValueError, AttributeError):
-                logging.warning(
-                    f"Could not serialize price data for '{ticker}' to save."
-                )
-        if not items_to_save:
-            return
+
         try:
             cursor = self.conn.cursor()
             cursor.execute("BEGIN TRANSACTION")
-            cursor.executemany(
-                "INSERT OR REPLACE INTO price_cache (ticker, data, timestamp) VALUES (?, ?, ?)",
-                items_to_save,
-            )
+
+            for ticker, cache_entry in cache_data.items():
+                try:
+                    data_dict = cache_entry.get("data", {})
+                    expiry_dt = cache_entry.get("expiry")
+                    if not data_dict or not expiry_dt:
+                        continue
+
+                    # Fetch the existing record from the database to perform a field-level merge.
+                    cursor.execute("SELECT data FROM price_cache WHERE ticker = ?", (ticker,))
+                    row = cursor.fetchone()
+
+                    if row:
+                        try:
+                            existing_dict = json.loads(row[0])
+                            # Merge existing persistent data with new memory update
+                            merged_dict = merge_price_data(existing_dict, data_dict)
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            merged_dict = data_dict
+                    else:
+                        merged_dict = data_dict
+
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO price_cache (ticker, data, timestamp) VALUES (?, ?, ?)",
+                        (ticker, json.dumps(merged_dict), expiry_dt.timestamp()),
+                    )
+                except Exception as e:
+                    logging.warning(
+                        f"Could not save price data for '{ticker}' to database: {e}"
+                    )
+
             self.conn.commit()
             logging.info(
-                f"Saved/Updated {len(items_to_save)} items in the persistent price cache."
+                f"Saved/Updated {len(cache_data)} items in the persistent price cache with field-level merging."
             )
         except sqlite3.Error as e:
             logging.error(f"Failed to save price cache to database: {e}")
-            self.conn.rollback()
+            if self.conn:
+                self.conn.rollback()
 
     def save_info_cache_to_db(self, cache_data: dict):
         """Saves the in-memory info cache to the database."""
