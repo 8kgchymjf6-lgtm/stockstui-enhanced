@@ -1,3 +1,4 @@
+import logging
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import ContentSwitcher
