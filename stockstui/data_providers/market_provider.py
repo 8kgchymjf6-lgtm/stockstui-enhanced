@@ -2,17 +2,23 @@ import yfinance as yf
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from typing import Any
 import time
 import pandas as pd
+from stockstui.utils import merge_price_data
+
 
 # In-memory cache for storing fetched market data to reduce API calls.
-_price_cache = {}
-_news_cache = {}
-_info_cache = {}
-_market_calendars = {}
+_price_cache: dict[str, dict[str, Any]] = {}
+_news_cache: dict[str, tuple[datetime, list[dict[str, Any]]]] = {}
+_info_cache: dict[str, dict[str, Any]] = {}
+_market_calendars: dict[str, Any] = {}
 
 # Duration for which cached news is considered fresh.
 NEWS_CACHE_DURATION_SECONDS = 300  # 5 minutes
+
+# Quote types that should bypass regular market hours checks (e.g., they update 24/7).
+EXEMPT_QUOTE_TYPES = {"FUTURE", "CRYPTOCURRENCY", "CURRENCY"}
 
 try:
     import pandas_market_calendars as mcal
@@ -95,26 +101,22 @@ def get_info_cache_state() -> dict:
 
 
 def get_market_price_data(
-    tickers: list[str], force_refresh: bool = False
+    tickers: list[str], force_refresh: bool = False, enable_pre_post_market: bool = False
 ) -> list[dict]:
     seen = set()
-    valid_tickers = [
-        t.upper()
-        for t in tickers
-        if t and t.upper() not in seen and not seen.add(t.upper())
-    ]
+    valid_tickers = []
+    for t in tickers:
+        if t and t.upper() not in seen:
+            up_t = t.upper()
+            valid_tickers.append(up_t)
+            seen.add(up_t)
     if not valid_tickers:
         return []
 
     now = datetime.now(timezone.utc)
 
-    # PERF: Batch market-status lookups by exchange.
-    # Previously this called get_market_status() once per ticker, which rebuilt
-    # a Pandas schedule DataFrame each time. Now we call it once per unique
-    # exchange and reuse the result for all tickers on that exchange.
-    _exchange_open_status: dict[str, bool] = {}
-
-    slow_data_to_fetch, fast_data_to_fetch = [], []
+    # 1. Determine which tickers need a full metadata (slow) fetch.
+    slow_data_to_fetch = []
     for ticker in valid_tickers:
         if (
             force_refresh
@@ -123,28 +125,73 @@ def get_market_price_data(
         ):
             slow_data_to_fetch.append(ticker)
 
-        info = _info_cache.get(ticker, {})
-        exchange = info.get("exchange", "NYSE")
-        if exchange not in _exchange_open_status:
-            _exchange_open_status[exchange] = bool(
-                get_market_status(exchange).get("is_open")
-            )
-        if _exchange_open_status[exchange]:
-            fast_data_to_fetch.append(ticker)
-
+    # 2. Perform slow fetch. This populates _info_cache, which is needed for the next step.
     if slow_data_to_fetch:
         _fetch_and_cache_slow_data(slow_data_to_fetch)
 
-    live_prices = _fetch_fast_data(fast_data_to_fetch) if fast_data_to_fetch else {}
+    # 3. Determine which tickers need a live intraday or pre/post (fast) fetch.
+    # PERF: Batch market-status lookups by exchange.
+    _exchange_statuses: dict[str, dict] = {}
+    fast_data_to_fetch, prepost_data_to_fetch = [], []
+
+    for ticker in valid_tickers:
+        info = _info_cache.get(ticker, {})
+        if not info:
+            continue
+
+        quote_type = str(info.get("quoteType", "")).upper()
+        supports_prepost = info.get("hasPrePostMarketData", False)
+
+        if quote_type in EXEMPT_QUOTE_TYPES:
+            fast_data_to_fetch.append(ticker)
+        else:
+            exchange = info.get("exchange", "NYSE")
+            if exchange not in _exchange_statuses:
+                _exchange_statuses[exchange] = get_market_status(exchange)
+
+            status = _exchange_statuses[exchange]
+            if status.get("is_open"):
+                fast_data_to_fetch.append(ticker)
+            elif (
+                enable_pre_post_market
+                and supports_prepost
+                and (
+                    status.get("status") in ("pre", "post")
+                    or (
+                        status.get("status") == "closed"
+                        and (
+                            force_refresh
+                            or ticker not in _price_cache
+                            or now >= _price_cache[ticker].get("expiry", now)
+                        )
+                    )
+                )
+            ):
+                prepost_data_to_fetch.append(ticker)
+
+    # 4. Perform fast/prepost fetch.
+    live_prices = {}
+    if fast_data_to_fetch:
+        live_prices.update(_fetch_fast_data(fast_data_to_fetch, prepost=False))
+    if prepost_data_to_fetch:
+        live_prices.update(_fetch_fast_data(prepost_data_to_fetch, prepost=True))
 
     # Merge live price updates back into the cache to maintain a single source of truth.
     # This prevents data loss when switching tabs mid-session.
     if live_prices:
         for ticker, fast_data_update in live_prices.items():
             if ticker in _price_cache and "data" in _price_cache[ticker]:
-                # Filter out None values to prevent overwriting valid cached data (fallback)
-                valid_updates = {k: v for k, v in fast_data_update.items() if v is not None}
-                _price_cache[ticker]["data"].update(valid_updates)
+                existing_data = _price_cache[ticker]["data"]
+                merged_data = merge_price_data(existing_data, fast_data_update)
+
+                # ASSUMPTION: yf.download() OHLCV batch download doesn't return market cap.
+                # So we calculate the updated market cap by multiplying new price by cached shares.
+                shares = merged_data.get("shares")
+                price = merged_data.get("price")
+                if shares and price:
+                    merged_data["market_cap"] = shares * price
+
+                _price_cache[ticker]["data"] = merged_data
 
     # Now that the cache is updated, construct the final list from it.
     final_data = []
@@ -208,58 +255,98 @@ def _fetch_and_cache_slow_data(tickers: list[str]):
                     "exchange": exchange,
                     "shortName": slow_info.get("shortName"),
                     "longName": slow_info.get("longName"),
+                    "quoteType": slow_info.get("quoteType"),
+                    "hasPrePostMarketData": slow_info.get("hasPrePostMarketData", False),
                 }
                 if exchange not in exchange_expiry_cache:
                     exchange_expiry_cache[exchange] = _calculate_info_expiry(exchange)
+                # yfinance returns objects that behave like dicts but Mypy doesn't always recognize them
+                fi: Any = fast_info
+                si: Any = slow_info
+
+                # Fetch shares to enable market cap calculations during fast updates
+                shares = None
+                try:
+                    shares = fi.get("shares")
+                except Exception:
+                    pass
+                if not shares:
+                    shares = si.get("sharesOutstanding") or si.get("floatShares")
+
+                new_data = {
+                    "symbol": ticker,
+                    "currency": fi.get("currency", si.get("currency", "USD")),
+                    "description": si.get("longName", ticker),
+                    "price": fi.get("lastPrice")
+                    or si.get("currentPrice")
+                    or si.get("regularMarketPrice"),
+                    "previous_close": si.get("regularMarketPreviousClose")
+                    or si.get("previousClose")
+                    or fi.get("previousClose")
+                    or si.get("open"),
+                    "day_low": fi.get("dayLow") or si.get("regularMarketDayLow"),
+                    "day_high": fi.get("dayHigh") or si.get("regularMarketDayHigh"),
+                    "volume": fi.get("lastVolume") or si.get("volume"),
+                    "open": fi.get("open") or si.get("open"),
+                    "fifty_two_week_low": si.get("fiftyTwoWeekLow"),
+                    "fifty_two_week_high": si.get("fiftyTwoWeekHigh"),
+                    "pe_ratio": si.get("trailingPE") or si.get("forwardPE"),
+                    "shares": shares,
+                    # Fallback to API-reported market cap if price or shares is missing/None
+                    "market_cap": (shares * (fi.get("lastPrice") or si.get("currentPrice") or si.get("regularMarketPrice")))
+                    if shares and (fi.get("lastPrice") or si.get("currentPrice") or si.get("regularMarketPrice"))
+                    else (fi.get("marketCap") or si.get("marketCap")),
+                    "dividend_yield": fi.get("dividendYield")
+                    or si.get("trailingAnnualDividendYield"),
+                    "eps": si.get("trailingEps") or si.get("forwardEps"),
+                    "beta": si.get("beta") or si.get("beta3Year"),
+                    "all_time_high": si.get("allTimeHigh"),
+                }
+
+                existing_entry = _price_cache.get(ticker)
+                if existing_entry and "data" in existing_entry:
+                    merged_data = merge_price_data(existing_entry["data"], new_data)
+                else:
+                    merged_data = new_data
+
                 _price_cache[ticker] = {
                     "expiry": exchange_expiry_cache[exchange],
-                    "data": {
-                        "symbol": ticker,
-                        "currency": fast_info.get("currency", slow_info.get("currency", "USD")),
-                        "description": slow_info.get("longName", ticker),
-                        "price": fast_info.get("lastPrice")
-                        or slow_info.get("currentPrice"),
-                        "previous_close": slow_info.get("regularMarketPreviousClose")
-                        or slow_info.get("previousClose")
-                        or fast_info.get("previousClose"),
-                        "day_low": fast_info.get("dayLow")
-                        or slow_info.get("regularMarketDayLow"),
-                        "day_high": fast_info.get("dayHigh")
-                        or slow_info.get("regularMarketDayHigh"),
-                        "volume": fast_info.get("lastVolume")
-                        or slow_info.get("volume"),
-                        "open": fast_info.get("open") or slow_info.get("open"),
-                        "fifty_two_week_low": slow_info.get("fiftyTwoWeekLow"),
-                        "fifty_two_week_high": slow_info.get("fiftyTwoWeekHigh"),
-                        "pe_ratio": slow_info.get("trailingPE")
-                        or slow_info.get("forwardPE"),
-                        "market_cap": fast_info.get("marketCap")
-                        or slow_info.get("marketCap"),
-                        "dividend_yield": slow_info.get("dividendYield")
-                        or slow_info.get("trailingAnnualDividendYield"),
-                        "eps": slow_info.get("trailingEps")
-                        or slow_info.get("forwardEps"),
-                        "beta": slow_info.get("beta") or slow_info.get("beta3Year"),
-                        "all_time_high": slow_info.get("allTimeHigh"),
-                    },
+                    "data": merged_data,
                 }
             else:
                 # If slow_info is None, it means _fetch_one caught an exception (fetch failed).
                 # If slow_info is a dict but has no currency, it's an invalid ticker.
+                # In either case, we merge or keep existing cached data to avoid N/A corruption on transient failures.
                 description = "Data Unavailable" if slow_info is None else "Invalid Ticker"
+                existing_entry = _price_cache.get(ticker)
+                if existing_entry and "data" in existing_entry:
+                    merged_data = existing_entry["data"].copy()
+                    if "description" not in merged_data or merged_data["description"] in ("Data Unavailable", "Invalid Ticker"):
+                        merged_data["description"] = description
+                else:
+                    merged_data = {"symbol": ticker, "description": description}
+
+                # If transient failure (slow_info is None), set short expiry so we retry later.
+                # If permanent failure (Invalid Ticker), cache for 1 day.
+                expiry_delta = timedelta(minutes=15) if slow_info is None else timedelta(days=1)
                 _price_cache[ticker] = {
-                    "expiry": datetime.now(timezone.utc) + timedelta(days=1),
-                    "data": {"symbol": ticker, "description": description},
+                    "expiry": datetime.now(timezone.utc) + expiry_delta,
+                    "data": merged_data,
                 }
         except Exception:
             logging.warning(f"Failed to cache slow data for {ticker}")
+            existing_entry = _price_cache.get(ticker)
+            if existing_entry and "data" in existing_entry:
+                merged_data = existing_entry["data"]
+            else:
+                merged_data = {"symbol": ticker, "description": "Data Unavailable"}
             _price_cache[ticker] = {
-                "expiry": datetime.now(timezone.utc) + timedelta(days=1),
-                "data": {"symbol": ticker, "description": "Data Unavailable"},
+                "expiry": datetime.now(timezone.utc) + timedelta(minutes=15),
+                "data": merged_data,
             }
 
 
-def _fetch_fast_data(tickers: list[str]) -> dict:
+def _fetch_fast_data(tickers: list[str], prepost: bool = False) -> dict:
     """
     Fetches live intraday OHLCV data for multiple tickers in a single batch call.
 
@@ -292,6 +379,7 @@ def _fetch_fast_data(tickers: list[str]) -> dict:
             progress=False,
             auto_adjust=False,
             multi_level_index=True,
+            prepost=prepost,
         )
 
         if df is None or df.empty:
@@ -304,11 +392,37 @@ def _fetch_fast_data(tickers: list[str]) -> dict:
                     # Market closed or no intraday data for this ticker today.
                     continue
 
+                # WORKAROUND: yf.download(period="1d") during pre-market (or occasionally post-market)
+                # can return stale data from the previous trading day if Yahoo Finance hasn't started
+                # serving today's chart/bars yet. If we are fetching pre/post market data (prepost=True),
+                # we must check that the returned data is from today to prevent overwriting the cache
+                # (which was populated with today's real-time pre-market quote by the slow fetch)
+                # with yesterday's stale closing prices.
+                if prepost:
+                    info = _info_cache.get(ticker, {})
+                    exchange = info.get("exchange", "NYSE")
+                    cal = _get_calendar(exchange)
+                    tz = cal.tz if cal else "America/New_York"
+                    
+                    last_time = close_series.index[-1]
+                    last_time_local = (
+                        last_time.tz_convert(tz)
+                        if last_time.tzinfo
+                        else last_time.tz_localize("UTC").tz_convert(tz)
+                    )
+                    now_local = pd.Timestamp.now(tz=tz)
+                    
+                    if last_time_local.date() < now_local.date():
+                        logging.info(
+                            f"Skipping stale pre/post fast update for {ticker}: last bar at {last_time_local.date()} is older than today {now_local.date()}"
+                        )
+                        continue
+
                 high_series = df["High"][ticker].dropna()
                 low_series = df["Low"][ticker].dropna()
                 open_series = df["Open"][ticker].dropna()
                 vol_series = df["Volume"][ticker].dropna()
-
+                
                 live_prices[ticker] = {
                     # Last 1-minute close is the most recent trade price.
                     "price": float(close_series.iloc[-1]),
@@ -345,6 +459,8 @@ def get_ticker_info(ticker: str) -> dict | None:
             "exchange": info.get("exchange"),
             "shortName": info.get("shortName"),
             "longName": info.get("longName"),
+            "quoteType": info.get("quoteType"),
+            "hasPrePostMarketData": info.get("hasPrePostMarketData", False),
         }
         return _info_cache[ticker]
     except Exception:
@@ -539,10 +655,25 @@ def get_ticker_info_comparison(ticker: str) -> dict:
         ticker_obj = yf.Ticker(ticker)
         fast_info, slow_info = ticker_obj.fast_info, ticker_obj.info
         if not slow_info:
-            return {"fast": {}, "slow": {}}
-        return {"fast": fast_info, "slow": slow_info}
+            return {"fast": {}, "slow": {}, "batch": {}, "prepost": {}}
+        
+        # Fetch batch data (which uses yf.download) for the ticker to compare with fast_info and info
+        try:
+            batch_data = _fetch_fast_data([ticker])
+            batch_info = batch_data.get(ticker, {})
+        except Exception:
+            batch_info = {}
+
+        # Fetch batch data with pre/post-market enabled to compare
+        try:
+            prepost_data = _fetch_fast_data([ticker], prepost=True)
+            prepost_info = prepost_data.get(ticker, {})
+        except Exception:
+            prepost_info = {}
+            
+        return {"fast": fast_info, "slow": slow_info, "batch": batch_info, "prepost": prepost_info}
     except Exception:
-        return {"fast": {}, "slow": {}}
+        return {"fast": {}, "slow": {}, "batch": {}, "prepost": {}}
 
 
 def run_ticker_debug_test(tickers: list[str]) -> list[dict]:
@@ -572,11 +703,11 @@ def run_ticker_debug_test(tickers: list[str]) -> list[dict]:
             }
         )
 
-    results.sort(key=lambda x: x["latency"], reverse=True)
+    results.sort(key=lambda x: float(x["latency"]), reverse=True)
     return results
 
 
-def run_list_debug_test(lists: dict[str, list[str]]):
+def run_list_debug_test(lists: dict[str, list[str]]) -> list[dict]:
     """
     Measures the time it takes to fetch data for entire lists of tickers.
     This is a true network test.
@@ -595,7 +726,7 @@ def run_list_debug_test(lists: dict[str, list[str]]):
         results.append(
             {"list_name": list_name, "latency": latency, "ticker_count": len(tickers)}
         )
-    results.sort(key=lambda x: x["latency"], reverse=True)
+    results.sort(key=lambda x: float(x["latency"]), reverse=True)  # type: ignore
     return results
 
 
@@ -614,7 +745,7 @@ def run_cache_test(lists: dict[str, list[str]]) -> list[dict]:
             {"list_name": list_name, "latency": latency, "ticker_count": len(tickers)}
         )
 
-    results.sort(key=lambda x: x["latency"], reverse=True)
+    results.sort(key=lambda x: float(x["latency"]), reverse=True)  # type: ignore
     return results
 
 
