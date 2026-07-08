@@ -34,7 +34,7 @@ from textual.widgets import (
     ListView,
 )
 from textual.timer import Timer
-from textual.widgets.data_table import CellDoesNotExist
+from textual.widgets.data_table import CellDoesNotExist, RowDoesNotExist
 from textual.coordinate import Coordinate
 from textual.widget import Widget
 from textual import on, work, events
@@ -350,6 +350,9 @@ class StocksTUI(App):
                 [(t, t) for t in self._available_theme_names]
             )
             general_view.query_one("#theme-select", Select).value = active_theme
+            general_view.query_one(
+                "#enable-pre-post-market-switch", Switch
+            ).value = self.config.get_setting("enable_pre_post_market", False)
             general_view.query_one(
                 "#auto-refresh-switch", Switch
             ).value = self.config.get_setting("auto_refresh", False)
@@ -856,7 +859,8 @@ class StocksTUI(App):
             active_tab_id = self.query_one(Tabs).active
             if active_tab_id:
                 return self.tab_map[int(active_tab_id.split("-")[1]) - 1]["category"]
-        except (NoMatches, IndexError, ValueError):
+        except (NoMatches, IndexError, ValueError, KeyError):
+            # KeyError guard: tab_map may not yet contain the index during app rebuild.
             return None
         return None
 
@@ -979,7 +983,14 @@ class StocksTUI(App):
                         price_table.loading = True
                 except NoMatches:
                     logging.debug("Price table not found during refresh")
-                self.fetch_prices(symbols, force=force, category=category)
+
+                enable_pre_post = self.config.get_setting("enable_pre_post_market", False)
+                self.fetch_prices(
+                    symbols,
+                    force=force,
+                    category=category,
+                    enable_pre_post_market=enable_pre_post,
+                )
 
     def action_toggle_help(self) -> None:
         """
@@ -1236,7 +1247,13 @@ class StocksTUI(App):
 
             if symbols and not any(market_provider.is_cached(s) for s in symbols):
                 price_table.loading = True
-                self.fetch_prices(symbols, force=False, category=category)
+                enable_pre_post = self.config.get_setting("enable_pre_post_market", False)
+                self.fetch_prices(
+                    symbols,
+                    force=False,
+                    category=category,
+                    enable_pre_post_market=enable_pre_post,
+                )
             elif symbols:
                 data_map = {
                     item["symbol"]: item
@@ -1260,17 +1277,35 @@ class StocksTUI(App):
                 else:
                     price_table.clear()
                     price_table.loading = True
-                    self.fetch_prices(symbols, force=False, category=category)
+                    enable_pre_post = self.config.get_setting(
+                        "enable_pre_post_market", False
+                    )
+                    self.fetch_prices(
+                        symbols,
+                        force=False,
+                        category=category,
+                        enable_pre_post_market=enable_pre_post,
+                    )
             else:
                 price_table.add_row(
                     f"[dim]No symbols in list '{category}'. Add some in the Configs tab.[/dim]"
                 )
 
     @work(exclusive=True, thread=True)
-    def fetch_prices(self, symbols: list[str], force: bool, category: str):
+    def fetch_prices(
+        self,
+        symbols: list[str],
+        force: bool,
+        category: str,
+        enable_pre_post_market: bool = False,
+    ):
         """Worker to fetch market price data in the background."""
         try:
-            data = market_provider.get_market_price_data(symbols, force_refresh=force)
+            data = market_provider.get_market_price_data(
+                symbols,
+                force_refresh=force,
+                enable_pre_post_market=enable_pre_post_market,
+            )
             if not get_current_worker().is_cancelled:
                 self.post_message(PriceDataUpdated(data, category))
         except Exception as e:
@@ -1358,12 +1393,15 @@ class StocksTUI(App):
 
     @work(exclusive=True, thread=True)
     def run_info_comparison_test(self, ticker: str):
-        """Worker to fetch fast vs slow ticker info for the debug tab."""
+        """Worker to fetch fast vs slow vs batch vs prepost ticker info for the debug tab."""
         data = market_provider.get_ticker_info_comparison(ticker)
         if not get_current_worker().is_cancelled:
             self.post_message(
                 TickerInfoComparisonUpdated(
-                    fast_info=data["fast"], slow_info=data["slow"]
+                    fast_info=data["fast"],
+                    slow_info=data["slow"],
+                    batch_info=data.get("batch", {}),
+                    prepost_info=data.get("prepost", {}),
                 )
             )
 
@@ -1677,7 +1715,9 @@ class StocksTUI(App):
                         )
                     else:
                         dt.move_cursor(row=new_row_index)
-                except KeyError:
+                except (KeyError, RowDoesNotExist):
+                    # Guard against RowDoesNotExist raised by textual when the row has been removed
+                    # or is not yet fully rendered in the DataTable during refresh/switching.
                     pass
 
             self._is_filter_refresh = False
@@ -1793,7 +1833,7 @@ class StocksTUI(App):
     async def on_ticker_info_comparison_updated(
         self, message: TickerInfoComparisonUpdated
     ):
-        """Handles arrival of the fast/slow info comparison test data."""
+        """Handles arrival of the fast/slow/batch/prepost info comparison test data."""
         try:
             for button in self.query(".debug-buttons Button"):
                 button.disabled = False
@@ -1801,16 +1841,28 @@ class StocksTUI(App):
             dt.loading = False
             dt.clear()
             rows = formatter.format_info_comparison(
-                message.fast_info, message.slow_info
+                message.fast_info, message.slow_info, message.batch_info, message.prepost_info
             )
             muted_color = self.theme_variables.get("text-muted", "dim")
             warning_color = self.theme_variables.get("warning", "yellow")
-            for key, fast_val, slow_val, is_mismatch in rows:
+            for key, fast_val, batch_val, prepost_val, slow_val, is_mismatch in rows:
                 fast_text = Text(
                     fast_val,
                     style=warning_color
                     if is_mismatch
                     else (muted_color if fast_val == "N/A" else ""),
+                )
+                batch_text = Text(
+                    batch_val,
+                    style=warning_color
+                    if is_mismatch
+                    else (muted_color if batch_val == "N/A" else ""),
+                )
+                prepost_text = Text(
+                    prepost_val,
+                    style=warning_color
+                    if is_mismatch
+                    else (muted_color if prepost_val == "N/A" else ""),
                 )
                 slow_text = Text(
                     slow_val,
@@ -1818,7 +1870,7 @@ class StocksTUI(App):
                     if is_mismatch
                     else (muted_color if slow_val == "N/A" else ""),
                 )
-                dt.add_row(key, fast_text, slow_text)
+                dt.add_row(key, fast_text, batch_text, prepost_text, slow_text)
         except NoMatches:
             pass
 
@@ -1973,9 +2025,9 @@ class StocksTUI(App):
             self.query_one("#last-refresh-time", Label).update(
                 "Raw FRED API Data Loaded"
             )
-        except NoMatches:
-            pass
-        except NoMatches:
+        except (NoMatches, KeyError):
+            # Guard against obs dicts missing 'date'/'value' keys and against
+            # the widget tree not being fully built yet.
             pass
 
     def _apply_price_table_sort(self) -> None:
@@ -2085,7 +2137,7 @@ class StocksTUI(App):
             self.set_timer(
                 0.8, lambda: self.unflash_cell(row_key, column_key, current_content)
             )
-        except (KeyError, NoMatches, AttributeError):
+        except (KeyError, NoMatches, AttributeError, CellDoesNotExist):
             pass
 
     def unflash_cell(
@@ -2730,7 +2782,8 @@ def run_cli_output(args: argparse.Namespace):
             if ticker and ticker not in seen_tickers:
                 ordered_tickers.append(ticker)
                 seen_tickers.add(ticker)
-                alias_map[ticker] = item.get("alias", ticker)
+                # Map missing or empty aliases to empty string so description falls back to provider description
+                alias_map[ticker] = item.get("alias") or ""
 
     if not ordered_tickers and not fred_requested:
         console.print(
@@ -2741,58 +2794,51 @@ def run_cli_output(args: argparse.Namespace):
     if ordered_tickers:
         with console.status("[bold green]Fetching data...[/]"):
             try:
-                ticker_objects = yf.Tickers(" ".join(ordered_tickers))
-                all_info = {
-                    ticker: ticker_objects.tickers[ticker].info
-                    for ticker in ordered_tickers
-                }
+                enable_pre_post = config.get_setting("enable_pre_post_market", False)
+                data = market_provider.get_market_price_data(
+                    ordered_tickers, enable_pre_post_market=enable_pre_post
+                )
+                # Map data by symbol for easier lookup
+                data_map = {item["symbol"]: item for item in data}
             except Exception as e:
                 console.print(f"[bold red]Failed to fetch data from API:[/] {e}")
                 return
 
         rows = []
         for ticker in ordered_tickers:
-            info = all_info.get(ticker)
-            if not info or not info.get("currency"):
-                rows.append(("Invalid Ticker", None, None, None, "N/A", "N/A", ticker, "$"))
+            ticker_data: dict[str, Any] | None = data_map.get(ticker)
+            if not ticker_data or ticker_data.get("description") in ("Invalid Ticker", "Data Unavailable"):
+                rows.append((ticker_data.get("description", "Invalid Ticker") if ticker_data else "Invalid Ticker", None, None, None, "N/A", "N/A", ticker, "$"))
                 continue
 
-            price = (
-                info.get("lastPrice")
-                or info.get("currentPrice")
-                or info.get("regularMarketPrice")
-            )
-            prev_close = (
-                info.get("regularMarketPreviousClose")
-                or info.get("previousClose")
-                or info.get("open")
-            )
-            change = (
-                price - prev_close
-                if price is not None and prev_close is not None
-                else None
-            )
-            change_percent = (
-                (change / prev_close)
-                if change is not None and prev_close != 0
-                else None
-            )
+            price = ticker_data.get("price")
+            previous_close = ticker_data.get("previous_close")
 
-            # Resolve currency symbol
-            currency_code = info.get("currency", "USD")
+            change, change_percent = None, None
+            if price is not None and previous_close is not None and previous_close != 0:
+                change = price - previous_close
+                change_percent = change / previous_close
+
+            # Resolve currency symbol using the fetched ticker data, not the last item in the list iteration
+            currency_code = ticker_data.get("currency", "USD")
             sym = formatter.get_currency_symbol(currency_code)
 
+            day_low = ticker_data.get("day_low")
+            day_high = ticker_data.get("day_high")
             day_range = (
-                f"{sym}{info.get('regularMarketDayLow'):,.2f} - {sym}{info.get('regularMarketDayHigh'):,.2f}"
-                if info.get("regularMarketDayLow") and info.get("regularMarketDayHigh")
+                f"{sym}{day_low:,.2f} - {sym}{day_high:,.2f}"
+                if day_low is not None and day_high is not None
                 else "N/A"
             )
+
+            fifty_two_week_low = ticker_data.get("fifty_two_week_low")
+            fifty_two_week_high = ticker_data.get("fifty_two_week_high")
             wk_range = (
-                f"{sym}{info.get('fiftyTwoWeekLow'):,.2f} - {sym}{info.get('fiftyTwoWeekHigh'):,.2f}"
-                if info.get("fiftyTwoWeekLow") and info.get("fiftyTwoWeekHigh")
+                f"{sym}{fifty_two_week_low:,.2f} - {sym}{fifty_two_week_high:,.2f}"
+                if fifty_two_week_low is not None and fifty_two_week_high is not None
                 else "N/A"
             )
-            description = alias_map.get(ticker) or info.get("longName", ticker)
+            description = alias_map.get(ticker) or ticker_data.get("description", ticker)
             rows.append(
                 (
                     description,
