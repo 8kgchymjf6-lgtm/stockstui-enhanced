@@ -6,12 +6,7 @@ from stockstui.ui.widgets.search_box import SearchBox
 from stockstui.ui.views.config_view import ConfigContainer
 
 # Import the real exception Textual raises when a query finds nothing.
-try:
-    # Textual 0.30+ locations
-    from textual.css.query import NoMatches
-except Exception:  # pragma: no cover - fallback for other versions
-    # Very old fallback (kept to be resilient)
-    from textual.css.query import QueryError as NoMatches
+from textual.css.query import NoMatches
 
 
 class TestAppRefreshActions(unittest.IsolatedAsyncioTestCase):
@@ -25,7 +20,10 @@ class TestAppRefreshActions(unittest.IsolatedAsyncioTestCase):
 
         self.app.action_refresh(force=False)
         self.app.fetch_prices.assert_called_once_with(
-            ["AAPL", "TSLA"], force=False, category="stocks"
+            ["AAPL", "TSLA"],
+            force=False,
+            category="stocks",
+            enable_pre_post_market=False,
         )
 
     def test_action_refresh_force(self):
@@ -35,7 +33,7 @@ class TestAppRefreshActions(unittest.IsolatedAsyncioTestCase):
 
         self.app.action_refresh(force=True)
         self.app.fetch_prices.assert_called_once_with(
-            ["BTC-USD"], force=True, category="crypto"
+            ["BTC-USD"], force=True, category="crypto", enable_pre_post_market=False
         )
 
     def test_action_refresh_with_tag_filter(self):
@@ -45,7 +43,7 @@ class TestAppRefreshActions(unittest.IsolatedAsyncioTestCase):
 
         self.app.action_refresh(force=False)
         self.app.fetch_prices.assert_called_once_with(
-            ["TSLA"], force=False, category="stocks"
+            ["TSLA"], force=False, category="stocks", enable_pre_post_market=False
         )
 
     def test_action_refresh_all_category(self):
@@ -59,7 +57,7 @@ class TestAppRefreshActions(unittest.IsolatedAsyncioTestCase):
         self.app.action_refresh(force=False)
         expected_symbols = ["AAPL", "TSLA", "^GSPC"]
         self.app.fetch_prices.assert_called_once_with(
-            expected_symbols, force=False, category="all"
+            expected_symbols, force=False, category="all", enable_pre_post_market=False
         )
 
 
@@ -149,3 +147,35 @@ class TestAppFilterActions(unittest.IsolatedAsyncioTestCase):
         )
         self.app.bell.assert_called_once()
         self.assertFalse(mock_tag_filter.display)
+
+
+class TestGetActiveCategory(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.app = await create_test_app()
+
+    def test_cache_fast_path_bypasses_query(self):
+        """When _last_active_category is already set, the live query must be skipped entirely."""
+        self.app._last_active_category = "stocks"
+        self.app.query_one = MagicMock()
+
+        result = self.app.get_active_category()
+
+        self.assertEqual(result, "stocks")
+        self.app.query_one.assert_not_called()
+
+    def test_returns_correct_category_for_valid_tab_map(self):
+        """Happy path: ensure correct category is returned when tab_map is valid."""
+        self.app.tab_map = [
+            {"name": "All", "category": "all"},
+            {"name": "Stocks", "category": "stocks"},
+            {"name": "Crypto", "category": "crypto"},
+        ]
+        self.app._last_active_category = None
+
+        mock_tabs = MagicMock()
+        mock_tabs.active = "tab-2"  # Index 1 → "stocks"
+        self.app.query_one = MagicMock(return_value=mock_tabs)
+
+        result = self.app.get_active_category()
+        self.assertEqual(result, "stocks")
+
