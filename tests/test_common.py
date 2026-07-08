@@ -38,9 +38,16 @@ class TestCommonMessages(unittest.TestCase):
         self.assertEqual(msg.data, {"df": "fake"})
 
     def test_ticker_info_comparison_updated(self):
-        msg = TickerInfoComparisonUpdated({"fast": 1}, {"slow": 2})
+        msg = TickerInfoComparisonUpdated({"fast": 1}, {"slow": 2}, {"batch": 3}, {"prepost": 4})
         self.assertEqual(msg.fast_info, {"fast": 1})
         self.assertEqual(msg.slow_info, {"slow": 2})
+        self.assertEqual(msg.batch_info, {"batch": 3})
+        self.assertEqual(msg.prepost_info, {"prepost": 4})
+
+        # Test default/none value
+        msg_default = TickerInfoComparisonUpdated({"fast": 1}, {"slow": 2})
+        self.assertEqual(msg_default.batch_info, {})
+        self.assertEqual(msg_default.prepost_info, {})
 
     def test_ticker_debug_data_updated(self):
         msg = TickerDebugDataUpdated([{"d": 1}], 1.5)
