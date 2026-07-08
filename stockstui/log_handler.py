@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 from textual.app import App
 
 
@@ -25,7 +26,8 @@ class TextualHandler(logging.Handler):
         This method is thread-safe.
         """
         # Check if TUI logs are suppressed in config
-        if self.app.config.get_setting("suppress_tui_logs", False):
+        app: Any = self.app
+        if app.config.get_setting("suppress_tui_logs", False):
             return
 
         try:
