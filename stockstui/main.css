@@ -62,10 +62,10 @@ Tabs .underline--bar {
 }
 
 #debug-table {
-  width: auto;
-  /* Width adjusts to content */
-  height: auto;
-  /* Height adjusts to content */
+  width: 1fr;
+  /* Let table fill the width and enable scrollbars */
+  height: 1fr;
+  /* Let table fill the height and enable scrollbars */
 }
 
 /* --- Style DataTable headers to pop --- */
