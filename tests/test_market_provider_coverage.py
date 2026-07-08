@@ -201,16 +201,28 @@ class TestMarketProviderCoverage(unittest.TestCase):
             self.assertEqual(len(results), 1)
             self.assertTrue(results[0]["is_valid"])
 
+    @patch("stockstui.data_providers.market_provider._fetch_fast_data")
     @patch("stockstui.data_providers.market_provider.yf.Ticker")
-    def test_get_ticker_info_comparison(self, mock_ticker):
-        """Test comparing fast and slow info."""
+    def test_get_ticker_info_comparison(self, mock_ticker, mock_fetch_fast):
+        """Test comparing fast, slow, batch, and prepost info."""
         mock_instance = mock_ticker.return_value
         mock_instance.fast_info = {"price": 100}
         mock_instance.info = {"currentPrice": 100}
 
+        def fetch_fast_side_effect(tickers, prepost=False):
+            if prepost:
+                return {"AAPL": {"price": 102}}
+            return {"AAPL": {"price": 101}}
+        mock_fetch_fast.side_effect = fetch_fast_side_effect
+
         comp = market_provider.get_ticker_info_comparison("AAPL")
         self.assertEqual(comp["fast"], {"price": 100})
         self.assertEqual(comp["slow"], {"currentPrice": 100})
+        self.assertEqual(comp["batch"], {"price": 101})
+        self.assertEqual(comp["prepost"], {"price": 102})
+        self.assertEqual(mock_fetch_fast.call_count, 2)
+        mock_fetch_fast.assert_any_call(["AAPL"])
+        mock_fetch_fast.assert_any_call(["AAPL"], prepost=True)
 
 
 if __name__ == "__main__":
