@@ -49,149 +49,209 @@ class ConfirmDeleteModal(ModalScreen[bool]):
         self.dismiss(event.button.id == "delete")
 
 
-class EditListModal(ModalScreen[str | None]):
+class ListModal(ModalScreen[str | None]):
+    """A shared base modal dialog for list operations (adding, renaming, etc.)."""
+
+    def __init__(self, value: str = "", placeholder: str = "List Name", is_edit: bool = False) -> None:
+        super().__init__()
+        self.value = value
+        self.placeholder = placeholder
+        self.is_edit = is_edit
+
+    def compose(self) -> ComposeResult:
+        """Creates the layout for the list modal, sharing input structure and buttons."""
+        label_text = "Enter new list name:" if self.is_edit else "Enter new list name (e.g., 'crypto'):"
+        button_label = "Save" if self.is_edit else "Add"
+        button_id = "save" if self.is_edit else "add"
+        with Vertical(id="dialog"):
+            yield Label(label_text)
+            yield Input(
+                value=self.value,
+                placeholder=self.placeholder,
+                id="list-name-input",
+                validators=[NotEmpty()]
+            )
+            with Horizontal(id="dialog-buttons"):
+                yield Button(button_label, variant="primary", id=button_id)
+                yield Button("Cancel", id="cancel")
+
+    def on_mount(self) -> None:
+        """Focuses the input field immediately on mount to ensure a seamless, keyboard-friendly workflow, letting the user start typing without needing to manually click or tab to focus."""
+        self.query_one(Input).focus()
+
+    @on(Button.Pressed)
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handles button presses, dismissing the modal with the slugified list name or None."""
+        if event.button.id == "cancel":
+            self.dismiss(None)
+            return
+        input_widget = self.query_one(Input)
+        target_id = "save" if self.is_edit else "add"
+        if (
+            event.button.id == target_id
+            and input_widget.validate(input_widget.value).is_valid
+        ):
+            self.dismiss(slugify(input_widget.value))
+
+
+class EditListModal(ListModal):
     """A modal dialog for editing the name of an existing list."""
 
     def __init__(self, current_name: str) -> None:
-        """
-        Args:
-            current_name: The current name of the list being edited.
-        """
-        super().__init__()
-        self.current_name = current_name
-
-    def compose(self) -> ComposeResult:
-        """Creates the layout for the edit list modal."""
-        with Vertical(id="dialog"):
-            yield Label("Enter new list name:")
-            yield Input(
-                value=self.current_name, id="list-name-input", validators=[NotEmpty()]
-            )
-            with Horizontal(id="dialog-buttons"):
-                yield Button("Save", variant="primary", id="save")
-                yield Button("Cancel", id="cancel")
-
-    def on_mount(self) -> None:
-        """Sets focus to the input field when the modal is mounted."""
-        self.query_one(Input).focus()
-
-    @on(Button.Pressed)
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handles button presses, dismissing the modal with the new name or None."""
-        if event.button.id == "cancel":
-            self.dismiss(None)
-            return
-        input_widget = self.query_one(Input)
-        if (
-            event.button.id == "save"
-            and input_widget.validate(input_widget.value).is_valid
-        ):
-            self.dismiss(slugify(input_widget.value))
+        super().__init__(value=current_name, is_edit=True)
 
 
-class AddListModal(ModalScreen[str | None]):
+class AddListModal(ListModal):
     """A modal dialog for adding a new list."""
 
-    def compose(self) -> ComposeResult:
-        """Creates the layout for the add list modal."""
-        with Vertical(id="dialog"):
-            yield Label("Enter new list name (e.g., 'crypto'):")
-            yield Input(
-                placeholder="List Name", id="list-name-input", validators=[NotEmpty()]
-            )
-            with Horizontal(id="dialog-buttons"):
-                yield Button("Add", variant="primary", id="add")
-                yield Button("Cancel", id="cancel")
-
-    def on_mount(self) -> None:
-        """Sets focus to the input field when the modal is mounted."""
-        self.query_one(Input).focus()
-
-    @on(Button.Pressed)
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handles button presses, dismissing the modal with the new name or None."""
-        if event.button.id == "cancel":
-            self.dismiss(None)
-            return
-        input_widget = self.query_one(Input)
-        if (
-            event.button.id == "add"
-            and input_widget.validate(input_widget.value).is_valid
-        ):
-            self.dismiss(slugify(input_widget.value))
+    def __init__(self) -> None:
+        super().__init__(is_edit=False)
 
 
-class AddTickerModal(ModalScreen[tuple[str, str, str, str] | None]):
-    """A modal dialog for adding a new ticker to a list or portfolio."""
 
-    def __init__(self, context: str = "list") -> None:
-        """
-        Args:
-            context: Either "list" or "portfolio" to customize the dialog
-        """
+class TickerModal(ModalScreen[tuple[str, str, str, str] | list[tuple[str, str, str, str]] | None]):
+    """A shared base modal dialog for ticker operations (adding, editing, etc.).
+
+    Supports single-ticker mode (edit, or add without commas) and multi-ticker mode
+    (add with comma-separated tickers). In multi-ticker mode, alias and note fields
+    are hidden because they are per-ticker specific. Tags remain visible since they
+    can be applied to all tickers at once.
+    """
+
+    def __init__(
+        self,
+        ticker: str = "",
+        alias: str = "",
+        note: str = "",
+        tags: str = "",
+        is_edit: bool = False,
+        context: str = "list"
+    ) -> None:
         super().__init__()
+        self.ticker = ticker
+        self.alias = alias
+        self.note = note
+        self.tags = tags
+        self.is_edit = is_edit
         self.context = context
+        # Tracks whether multi-ticker mode is active (commas detected in ticker input)
+        self._multi_ticker_mode = False
 
     def compose(self) -> ComposeResult:
-        """Creates the layout for the add ticker modal."""
+        """Creates the layout for the ticker modal, sharing inputs and placeholder hints."""
         with Vertical(id="dialog"):
-            if self.context == "portfolio":
-                yield Label("Add stock to portfolio:")
-                yield Input(
-                    placeholder="Ticker (e.g., AAPL)",
-                    id="ticker-input",
-                    validators=[NotEmpty()],
-                )
-                yield Input(
-                    placeholder="Tags (optional, e.g., tech growth)", id="tags-input"
-                )
+            if self.is_edit:
+                yield Label("Edit ticker details:")
             else:
-                yield Label("Enter new ticker details:")
+                yield Label("Add stock to portfolio:" if self.context == "portfolio" else "Enter new ticker details:")
+
+            yield Input(
+                value=self.ticker,
+                placeholder="Ticker(s) (e.g., AAPL or AAPL,MSFT,GOOG)" if not self.is_edit else "Ticker (e.g., AAPL)",
+                id="ticker-input",
+                validators=[NotEmpty()],
+            )
+
+            if self.context != "portfolio":
                 yield Input(
-                    placeholder="Ticker (e.g., AAPL)",
-                    id="ticker-input",
-                    validators=[NotEmpty()],
+                    value=self.alias,
+                    placeholder="Alias (optional, e.g., Apple)",
+                    id="alias-input",
                 )
                 yield Input(
-                    placeholder="Alias (optional, e.g., Apple)", id="alias-input"
-                )
-                yield Input(
+                    value=self.note,
                     placeholder="Note (optional, e.g., Personal reminder)",
                     id="note-input",
                 )
-                yield Input(
-                    placeholder="Tags (optional, e.g., tech growth)", id="tags-input"
-                )
+
+            yield Input(
+                value=self.tags,
+                placeholder="Tags (optional, e.g., tech growth)",
+                id="tags-input",
+            )
+
+            button_label = "Save" if self.is_edit else "Add"
+            button_id = "save" if self.is_edit else "add"
             with Horizontal(id="dialog-buttons"):
-                yield Button("Add", variant="primary", id="add")
+                yield Button(button_label, variant="primary", id=button_id)
                 yield Button("Cancel", id="cancel")
 
     def on_mount(self) -> None:
-        """Sets focus to the ticker input field when the modal is mounted."""
+        """Focuses the ticker input field immediately on mount to enable a smooth, keyboard-driven experience, letting the user start typing the symbol immediately."""
         self.query_one("#ticker-input").focus()
+
+    @on(Input.Changed, "#ticker-input")
+    def _on_ticker_input_changed(self, event: Input.Changed) -> None:
+        """Dynamically hides alias and note fields when commas are detected in the ticker
+        input, since those fields are per-ticker specific and don't apply in bulk-add mode.
+        Only applies in add mode (not edit) and non-portfolio context."""
+        if self.is_edit or self.context == "portfolio":
+            return
+
+        has_comma = "," in event.value
+        if has_comma != self._multi_ticker_mode:
+            self._multi_ticker_mode = has_comma
+            try:
+                alias_input = self.query_one("#alias-input", Input)
+                note_input = self.query_one("#note-input", Input)
+                if has_comma:
+                    # Clear and hide alias/note since they don't apply to bulk adds
+                    alias_input.value = ""
+                    note_input.value = ""
+                    alias_input.display = False
+                    note_input.display = False
+                else:
+                    alias_input.display = True
+                    note_input.display = True
+            except Exception:
+                pass
 
     @on(Button.Pressed)
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handles button presses, dismissing the modal with ticker details or None."""
+        """Handles button presses, dismissing the modal with formatted ticker details or None.
+
+        In multi-ticker mode (commas in ticker input), returns a list of (ticker, '', '', tags)
+        tuples. In single-ticker mode, returns a single (ticker, alias, note, tags) tuple."""
         if event.button.id == "cancel":
             self.dismiss(None)
             return
+
         ticker_input = self.query_one("#ticker-input", Input)
         if (
-            event.button.id == "add"
+            event.button.id in ("add", "save")
             and ticker_input.validate(ticker_input.value).is_valid
         ):
-            ticker = ticker_input.value.strip().upper()
+            raw_value = ticker_input.value.strip()
             tags_input = self.query_one("#tags-input", Input).value.strip()
             tags = format_tags(parse_tags(tags_input))
 
             if self.context == "portfolio":
                 # For portfolio context, return ticker with tags
-                self.dismiss((ticker, "", "", tags))
+                self.dismiss((raw_value.upper(), "", "", tags))
+            elif self._multi_ticker_mode:
+                # Multi-ticker mode: parse comma-separated tickers, skip empties
+                tickers = [
+                    t.strip().upper()
+                    for t in raw_value.split(",")
+                    if t.strip()
+                ]
+                # Return list of tuples with empty alias/note for each ticker
+                result = [(t, "", "", tags) for t in tickers]
+                self.dismiss(result)
             else:
-                alias = self.query_one("#alias-input", Input).value.strip() or ticker
+                # Single-ticker mode: include alias and note
+                # Do NOT default alias to the ticker symbol so the app
+                # can fall back to the fetched description when alias is not set.
+                alias = self.query_one("#alias-input", Input).value.strip()
                 note = self.query_one("#note-input", Input).value.strip()
-                self.dismiss((ticker, alias, note, tags))
+                self.dismiss((ticker_input.value.strip().upper(), alias, note, tags))
+
+
+class AddTickerModal(TickerModal):
+    """A modal dialog for adding a new ticker to a list or portfolio."""
+
+    def __init__(self, context: str = "list") -> None:
+        super().__init__(is_edit=False, context=context)
 
 
 class AddFredSeriesModal(ModalScreen[tuple[str, str, str, str] | None]):
@@ -212,7 +272,7 @@ class AddFredSeriesModal(ModalScreen[tuple[str, str, str, str] | None]):
                 yield Button("Cancel", id="cancel")
 
     def on_mount(self) -> None:
-        """Sets focus to the series input field when the modal is mounted."""
+        """Focuses the series input field immediately on mount to enable a smooth, keyboard-driven experience, letting the user start typing the FRED Series ID immediately."""
         self.query_one("#series-input").focus()
 
     @on(Button.Pressed)
@@ -232,58 +292,19 @@ class AddFredSeriesModal(ModalScreen[tuple[str, str, str, str] | None]):
             self.dismiss((series_id, alias, "", ""))
 
 
-class EditTickerModal(ModalScreen[tuple[str, str, str, str] | None]):
+class EditTickerModal(TickerModal):
     """A modal dialog for editing an existing ticker's details."""
 
     def __init__(self, ticker: str, alias: str, note: str, tags: str = "") -> None:
-        """
-        Args:
-            ticker: The current ticker symbol.
-            alias: The current alias for the ticker.
-            note: The current note for the ticker.
-            tags: The current tags for the ticker (comma-separated string).
-        """
-        super().__init__()
-        self.ticker = ticker
-        self.alias = alias
-        self.note = note
-        self.tags = tags
+        super().__init__(
+            ticker=ticker,
+            alias=alias,
+            note=note,
+            tags=tags,
+            is_edit=True,
+            context="list"
+        )
 
-    def compose(self) -> ComposeResult:
-        """Creates the layout for the edit ticker modal."""
-        with Vertical(id="dialog"):
-            yield Label("Edit ticker details:")
-            yield Input(value=self.ticker, id="ticker-input", validators=[NotEmpty()])
-            yield Input(value=self.alias, id="alias-input")
-            yield Input(value=self.note, id="note-input")
-            yield Input(value=self.tags, id="tags-input")
-            with Horizontal(id="dialog-buttons"):
-                yield Button("Save", variant="primary", id="save")
-                yield Button("Cancel", id="cancel")
-
-    def on_mount(self) -> None:
-        """Sets focus to the ticker input field when the modal is mounted."""
-        self.query_one("#ticker-input").focus()
-
-    @on(Button.Pressed)
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handles button presses, dismissing the modal with updated ticker details or None."""
-        if event.button.id == "cancel":
-            self.dismiss(None)
-            return
-        ticker_input = self.query_one("#ticker-input", Input)
-        if (
-            event.button.id == "save"
-            and ticker_input.validate(ticker_input.value).is_valid
-        ):
-            ticker = ticker_input.value.strip().upper()
-            alias = (
-                self.query_one("#alias-input").value.strip() or ticker
-            )  # Default alias to ticker if empty
-            note = self.query_one("#note-input").value.strip()
-            tags_input = self.query_one("#tags-input").value.strip()
-            tags = format_tags(parse_tags(tags_input))
-            self.dismiss((ticker, alias, note, tags))
 
 
 class CompareInfoModal(ModalScreen[str | None]):
@@ -301,7 +322,7 @@ class CompareInfoModal(ModalScreen[str | None]):
                 yield Button("Cancel", id="cancel")
 
     def on_mount(self) -> None:
-        """Sets focus to the input field when the modal is mounted."""
+        """Focuses the input field immediately on mount to enable a smooth, keyboard-driven experience, letting the user start typing the symbol immediately."""
         self.query_one(Input).focus()
 
     def _submit(self) -> None:
@@ -324,68 +345,39 @@ class CompareInfoModal(ModalScreen[str | None]):
         self._submit()
 
 
-class CreatePortfolioModal(ModalScreen[tuple[str, str] | None]):
-    """A modal dialog for creating a new portfolio."""
+class PortfolioModal(ModalScreen[tuple[str, str] | None]):
+    """A shared base modal dialog for portfolio operations (creating, editing)."""
 
-    def compose(self) -> ComposeResult:
-        """Creates the layout for the create portfolio modal."""
-        with Vertical(id="dialog"):
-            yield Label("Create New Portfolio")
-            yield Input(
-                placeholder="Portfolio Name", id="name-input", validators=[NotEmpty()]
-            )
-            yield Input(placeholder="Description (optional)", id="description-input")
-            with Horizontal(id="dialog-buttons"):
-                yield Button("Create", variant="primary", id="create")
-                yield Button("Cancel", id="cancel")
-
-    def on_mount(self) -> None:
-        """Sets focus to the name input field when the modal is mounted."""
-        self.query_one("#name-input").focus()
-
-    @on(Button.Pressed)
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handles button presses, dismissing the modal with portfolio details or None."""
-        if event.button.id == "cancel":
-            self.dismiss(None)
-            return
-        name_input = self.query_one("#name-input", Input)
-        if (
-            event.button.id == "create"
-            and name_input.validate(name_input.value).is_valid
-        ):
-            name = name_input.value.strip()
-            description = self.query_one("#description-input").value.strip()
-            self.dismiss((name, description))
-
-
-class EditPortfolioModal(ModalScreen[tuple[str, str] | None]):
-    """A modal dialog for editing an existing portfolio."""
-
-    def __init__(self, current_name: str, current_description: str) -> None:
-        """
-        Args:
-            current_name: The current portfolio name
-            current_description: The current portfolio description
-        """
+    def __init__(self, name: str = "", description: str = "", is_edit: bool = False) -> None:
         super().__init__()
-        self.current_name = current_name
-        self.current_description = current_description
+        self.portfolio_name = name
+        self.portfolio_description = description
+        self.is_edit = is_edit
 
     def compose(self) -> ComposeResult:
-        """Creates the layout for the edit portfolio modal."""
+        """Creates the layout for the portfolio modal, sharing input structure and buttons."""
+        title_text = "Edit Portfolio" if self.is_edit else "Create New Portfolio"
+        button_label = "Save" if self.is_edit else "Create"
+        button_id = "save" if self.is_edit else "create"
         with Vertical(id="dialog"):
-            yield Label("Edit Portfolio")
+            yield Label(title_text)
             yield Input(
-                value=self.current_name, id="name-input", validators=[NotEmpty()]
+                value=self.portfolio_name,
+                placeholder="Portfolio Name",
+                id="name-input",
+                validators=[NotEmpty()],
             )
-            yield Input(value=self.current_description, id="description-input")
+            yield Input(
+                value=self.portfolio_description,
+                placeholder="Description (optional)",
+                id="description-input"
+            )
             with Horizontal(id="dialog-buttons"):
-                yield Button("Save", variant="primary", id="save")
+                yield Button(button_label, variant="primary", id=button_id)
                 yield Button("Cancel", id="cancel")
 
     def on_mount(self) -> None:
-        """Sets focus to the name input field when the modal is mounted."""
+        """Focuses the name input field immediately on mount to ensure a seamless, keyboard-friendly workflow, letting the user start typing the portfolio name without needing to click."""
         self.query_one("#name-input").focus()
 
     @on(Button.Pressed)
@@ -395,10 +387,29 @@ class EditPortfolioModal(ModalScreen[tuple[str, str] | None]):
             self.dismiss(None)
             return
         name_input = self.query_one("#name-input", Input)
-        if event.button.id == "save" and name_input.validate(name_input.value).is_valid:
+        target_id = "save" if self.is_edit else "create"
+        if (
+            event.button.id == target_id
+            and name_input.validate(name_input.value).is_valid
+        ):
             name = name_input.value.strip()
-            description = self.query_one("#description-input").value.strip()
+            description = self.query_one("#description-input", Input).value.strip()
             self.dismiss((name, description))
+
+
+class CreatePortfolioModal(PortfolioModal):
+    """A modal dialog for creating a new portfolio."""
+
+    def __init__(self) -> None:
+        super().__init__(is_edit=False)
+
+
+class EditPortfolioModal(PortfolioModal):
+    """A modal dialog for editing an existing portfolio."""
+
+    def __init__(self, current_name: str, current_description: str) -> None:
+        super().__init__(name=current_name, description=current_description, is_edit=True)
+
 
 
 class ConfirmAddToAllPortfoliosModal(ModalScreen[bool]):
@@ -449,7 +460,7 @@ class FredSeriesModal(ModalScreen[str | None]):
                 yield Button("Cancel", id="cancel")
 
     def on_mount(self) -> None:
-        """Focus the input field when the modal is mounted."""
+        """Focuses the FRED series input field immediately on mount to enable a smooth, keyboard-driven experience, letting the user start typing the FRED Series ID immediately."""
         self.query_one("#fred-series-input", Input).focus()
 
     @on(Input.Submitted, "#fred-series-input")
