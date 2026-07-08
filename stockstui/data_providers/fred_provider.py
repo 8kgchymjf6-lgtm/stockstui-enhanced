@@ -30,16 +30,20 @@ def get_series_observations(
 
     # Note: We omit limit from cache key for simplicity under the assumption
     # that we always request the same "10-year" optimized amount for a given series.
+    # Keep a reference to cached data so we can fall back to it if the network request fails.
+    _cached_fallback = None
     if series_id in _series_cache:
         timestamp, data = _series_cache[series_id]
         if (now - timestamp).total_seconds() < CACHE_DURATION_SECONDS:
-            # If cache has enough data, return it
+            # If cache has enough data, return it immediately
             if len(data) >= limit:
                 return data
+            # Cache is fresh but has fewer entries than requested — still useful as fallback
+            _cached_fallback = data
 
     try:
         url = f"{BASE_URL}/series/observations"
-        params = {
+        params: dict[str, Any] = {
             "series_id": series_id,
             "api_key": api_key,
             "file_type": "json",
@@ -55,6 +59,10 @@ def get_series_observations(
         return observations
     except requests.exceptions.RequestException as e:
         logging.error(f"Error fetching FRED series {series_id}: {e}")
+        # Fall back to cached data (even if it's smaller than requested) rather than losing it entirely
+        if _cached_fallback is not None:
+            logging.warning(f"Returning stale cached data for {series_id} due to network error.")
+            return _cached_fallback
         return None
 
 
@@ -238,7 +246,11 @@ def get_series_info(series_id: str, api_key: str) -> Optional[Dict[str, Any]]:
 
     try:
         url = f"{BASE_URL}/series"
-        params = {"series_id": series_id, "api_key": api_key, "file_type": "json"}
+        params: dict[str, Any] = {
+            "series_id": series_id,
+            "api_key": api_key,
+            "file_type": "json",
+        }
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -263,7 +275,7 @@ def search_series(search_text: str, api_key: str) -> List[Dict[str, Any]]:
 
     try:
         url = f"{BASE_URL}/series/search"
-        params = {
+        params: dict[str, Any] = {
             "search_text": search_text,
             "api_key": api_key,
             "file_type": "json",
@@ -371,11 +383,15 @@ def get_series_summary(series_id: str, api_key: str) -> Dict[str, Any]:
             summary["date"] = current_obs["date"]
 
         # Previous (1 period)
+        # IMPORTANT: We must skip computation entirely if prev value is "." (FRED's N/A sentinel).
+        # Falling back to 0 would make change_1p equal to the current absolute value, which is misleading.
         if len(obs_list) > 1 and summary["current"] != "N/A":
             prev_obs = obs_list[1]
             try:
-                prev_val = float(prev_obs["value"]) if prev_obs["value"] != "." else 0
-                summary["change_1p"] = summary["current"] - prev_val
+                if prev_obs["value"] != ".":
+                    prev_val = float(prev_obs["value"])
+                    summary["change_1p"] = summary["current"] - prev_val
+                # else: leave change_1p as "N/A" — no valid reference period
             except (ValueError, TypeError) as e:
                 logging.debug(f"Could not parse previous value for {series_id}: {e}")
 
@@ -418,8 +434,10 @@ def get_series_summary(series_id: str, api_key: str) -> Dict[str, Any]:
         obs_1y = find_closest_past(target_1y)
         if obs_1y and summary["current"] != "N/A":
             try:
-                val_1y = float(obs_1y["value"]) if obs_1y["value"] != "." else 0
-                summary["change_1y"] = summary["current"] - val_1y
+                if obs_1y["value"] != ".":
+                    val_1y = float(obs_1y["value"])
+                    summary["change_1y"] = summary["current"] - val_1y
+                # else: leave change_1y as "N/A" — no valid reference period
             except (ValueError, TypeError) as e:
                 logging.debug(f"Could not parse 1Y ago value for {series_id}: {e}")
 
@@ -428,8 +446,10 @@ def get_series_summary(series_id: str, api_key: str) -> Dict[str, Any]:
         obs_5y = find_closest_past(target_5y)
         if obs_5y and summary["current"] != "N/A":
             try:
-                val_5y = float(obs_5y["value"]) if obs_5y["value"] != "." else 0
-                summary["change_5y"] = summary["current"] - val_5y
+                if obs_5y["value"] != ".":
+                    val_5y = float(obs_5y["value"])
+                    summary["change_5y"] = summary["current"] - val_5y
+                # else: leave change_5y as "N/A" — no valid reference period
             except (ValueError, TypeError) as e:
                 logging.debug(f"Could not parse 5Y ago value for {series_id}: {e}")
 
