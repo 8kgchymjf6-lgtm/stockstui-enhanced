@@ -5,13 +5,14 @@ Options data provider for fetching stock options chains using yfinance.
 import logging
 import time
 import yfinance as yf
+from typing import Any
 import datetime
 from stockstui.utils import black_scholes
 
 
 # Cache for options data with TTL
-_options_cache = {}
-_expirations_cache = {}
+_options_cache: dict[str, dict[str, Any]] = {}
+_expirations_cache: dict[str, dict[str, Any]] = {}
 OPTIONS_CACHE_TTL = 600  # 10 minutes in seconds
 
 
