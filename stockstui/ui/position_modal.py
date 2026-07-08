@@ -1,3 +1,4 @@
+import logging
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label
 from textual.containers import Vertical, Horizontal, Grid
