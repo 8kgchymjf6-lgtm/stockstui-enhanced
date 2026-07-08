@@ -37,11 +37,13 @@ class HistoricalDataUpdated(Message):
 
 
 class TickerInfoComparisonUpdated(Message):
-    """Posted when fast and slow info for a ticker has been fetched for comparison."""
+    """Posted when fast, slow, and batch info for a ticker has been fetched for comparison."""
 
-    def __init__(self, fast_info: dict, slow_info: dict) -> None:
+    def __init__(self, fast_info: dict, slow_info: dict, batch_info: dict | None = None, prepost_info: dict | None = None) -> None:
         self.fast_info = fast_info
         self.slow_info = slow_info
+        self.batch_info = batch_info if batch_info is not None else {}
+        self.prepost_info = prepost_info if prepost_info is not None else {}
         super().__init__()
 
 
