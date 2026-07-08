@@ -1,4 +1,5 @@
 import math
+from datetime import datetime
 from textual.containers import Vertical, Horizontal, Container
 from textual.widgets import (
     Input,
@@ -141,8 +142,6 @@ class OptionsView(Vertical):
             sym = get_currency_symbol(currency_code)
 
             # Calculate days to expiration
-            from datetime import datetime
-
             try:
                 expiration_str = last_data.get("expiration", "")
                 exp_date = datetime.strptime(expiration_str, "%Y-%m-%d")
