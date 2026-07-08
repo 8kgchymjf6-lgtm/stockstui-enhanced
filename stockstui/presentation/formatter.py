@@ -240,29 +240,38 @@ def format_cache_test_data_for_table(data: list[dict]) -> list[tuple]:
 
 
 def format_info_comparison(
-    fast_info: dict, slow_info: dict
-) -> list[tuple[str, str, str, bool]]:
+    fast_info: dict, slow_info: dict, batch_info: dict | None = None, prepost_info: dict | None = None
+) -> list[tuple[str, str, str, str, str, bool]]:
     """
-    Compares 'fast_info' and full 'info' from yfinance and formats for a table.
+    Compares 'fast_info', full 'info', batch download, and prepost download data from yfinance and formats for a table.
 
-    This is a debugging tool to see the difference in data provided by the two
-    different yfinance methods.
+    This is a debugging tool to see the difference in data provided by the four
+    different yfinance methods (fast_info, info, download/batch, and download/prepost).
 
     Args:
         fast_info: The dictionary from yfinance's `fast_info`.
         slow_info: The dictionary from yfinance's `info`.
+        batch_info: The dictionary from yfinance's batch download.
+        prepost_info: The dictionary from yfinance's prepost batch download.
 
     Returns:
-        A list of tuples, each containing a key, the two values, and a mismatch flag.
+        A list of tuples, each containing a key, the four values in (fast, batch, prepost, slow) order, and a mismatch flag.
     """
-    if not slow_info:
-        return [("Error", "Could not retrieve data.", "Ticker may be invalid.", False)]
+    if batch_info is None:
+        batch_info = {}
+    if prepost_info is None:
+        prepost_info = {}
 
-    # Find the union of all keys from both dictionaries safely.
-    # We use hasattr in case either fast_info or slow_info is not fully dict-like.
+    if not slow_info and not fast_info and not batch_info and not prepost_info:
+        return [("Error", "Could not retrieve data.", "Ticker may be invalid.", "N/A", "N/A", False)]
+
+    # Find the union of all keys from all dictionaries safely.
+    # We use hasattr in case any object is not fully dict-like.
     fast_keys = set(fast_info.keys()) if hasattr(fast_info, "keys") else set()
     slow_keys = set(slow_info.keys()) if hasattr(slow_info, "keys") else set()
-    all_keys = sorted(list(fast_keys | slow_keys))
+    batch_keys = set(batch_info.keys()) if hasattr(batch_info, "keys") else set()
+    prepost_keys = set(prepost_info.keys()) if hasattr(prepost_info, "keys") else set()
+    all_keys = sorted(list(fast_keys | slow_keys | batch_keys | prepost_keys))
 
     rows = []
     for key in all_keys:
@@ -278,10 +287,28 @@ def format_info_comparison(
         except Exception:
             val_slow = "N/A"
 
-        # Flag a mismatch only if both values exist but are different
-        is_mismatch = val_fast != "N/A" and val_slow != "N/A" and val_fast != val_slow
+        try:
+            val_batch = batch_info.get(key, "N/A") if hasattr(batch_info, "get") else "N/A"
+        except Exception:
+            val_batch = "N/A"
 
-        rows.append((key, str(val_fast), str(val_slow), is_mismatch))
+        try:
+            val_prepost = prepost_info.get(key, "N/A") if hasattr(prepost_info, "get") else "N/A"
+        except Exception:
+            val_prepost = "N/A"
+
+        # Flag a mismatch if any of the available non-"N/A" values disagree.
+        # This checks if there is more than one unique value among the present sources.
+        non_na_vals = [v for v in (val_fast, val_slow, val_batch, val_prepost) if v != "N/A"]
+        is_mismatch = False
+        if len(non_na_vals) > 1:
+            first = non_na_vals[0]
+            for v in non_na_vals[1:]:
+                if v != first:
+                    is_mismatch = True
+                    break
+
+        rows.append((key, str(val_fast), str(val_batch), str(val_prepost), str(val_slow), is_mismatch))
 
     return rows
 
