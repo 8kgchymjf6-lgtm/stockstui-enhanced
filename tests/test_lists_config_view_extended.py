@@ -64,6 +64,8 @@ class ListsConfigViewTestApp(App):
         self.config.save_settings = MagicMock()
         self.notify = MagicMock()
         self._rebuild_app = MagicMock()
+        self._rebuild_visible_columns = MagicMock()
+        self._display_data_for_category = AsyncMock()
 
     def compose(self):
         yield ListsConfigView()
@@ -472,6 +474,9 @@ class TestListsConfigView(unittest.IsolatedAsyncioTestCase):
             # Call the handler
             view.on_column_visibility_changed(mock_event)
 
+            # Verify that app._rebuild_visible_columns was called
+            app._rebuild_visible_columns.assert_called_once()
+
     async def test_on_key_navigation(self):
         """Test keyboard navigation."""
         app = ListsConfigViewTestApp()
@@ -579,11 +584,14 @@ class TestListsConfigView(unittest.IsolatedAsyncioTestCase):
             if columns_view.children:
                 columns_view.index = 1  # Point to second column if available
 
-            # Test move up - fix the await issue
+            # Test move up
             view.on_move_col_up()
 
             # Test move down
             view.on_move_col_down()
+
+            # Verify that app._rebuild_visible_columns was called
+            self.assertGreaterEqual(app._rebuild_visible_columns.call_count, 1)
 
     async def test_on_row_selected(self):
         """Test row selection event."""
