@@ -134,6 +134,48 @@ class TestDbManager(unittest.TestCase):
 
         self.assertEqual(loaded_data, sample_data)
 
+    def test_save_price_cache_merges_fields(self):
+        """Test that save_price_cache_to_db performs a field-level merge with existing DB data."""
+        now = datetime.now(timezone.utc)
+        
+        # 1. Save initial entry
+        initial_data = {
+            "AAPL": {
+                "expiry": now,
+                "data": {
+                    "symbol": "AAPL",
+                    "price": 150.0,
+                    "all_time_high": 200.0,
+                    "description": "Apple Inc."
+                }
+            }
+        }
+        self.dbm.save_price_cache_to_db(initial_data)
+        
+        # 2. Save partial update with None/missing fields
+        update_data = {
+            "AAPL": {
+                "expiry": now,
+                "data": {
+                    "symbol": "AAPL",
+                    "price": 155.0,
+                    "all_time_high": None,
+                    "pe_ratio": 30.0
+                }
+            }
+        }
+        self.dbm.save_price_cache_to_db(update_data)
+        
+        # 3. Load from DB and verify fields are merged
+        loaded = self.dbm.load_price_cache_from_db()
+        aapl_data = loaded["AAPL"]["data"]
+        
+        self.assertEqual(aapl_data["price"], 155.0, "Price should be updated")
+        self.assertEqual(aapl_data["all_time_high"], 200.0, "ATH should be retained")
+        self.assertEqual(aapl_data["pe_ratio"], 30.0, "PE ratio should be added")
+        self.assertEqual(aapl_data["description"], "Apple Inc.", "Description should be retained")
+
 
 if __name__ == "__main__":
     unittest.main()
+
