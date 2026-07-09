@@ -3,7 +3,7 @@
 import unittest
 
 from textual.app import App
-from textual.widgets import Button, Input
+from textual.widgets import Input
 
 from stockstui.ui.edit_fred_series_modal import EditFredSeriesModal
 
@@ -54,8 +54,7 @@ class TestEditFredSeriesModal(unittest.IsolatedAsyncioTestCase):
             
             alias_input = modal.query_one("#alias-input", Input)
             alias_input.value = "New Alias"
-            
-            save_button = modal.query_one("#save", Button)
+
             await pilot.click("#save")
             await pilot.pause()
             
