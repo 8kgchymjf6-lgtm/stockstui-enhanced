@@ -206,26 +206,36 @@ class TestFormatter(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows_cache[0], ("C1", 5, 0.2))
 
     def test_format_info_comparison(self):
-        """Test comparing fast and slow info dictionaries."""
+        """Test comparing fast, slow, batch, and prepost info dictionaries."""
         fast = {"a": 1, "b": 2}
         slow = {"a": 1, "b": 3, "c": 4}
+        batch = {"a": 1, "b": 2, "d": 5}
+        prepost = {"a": 1, "b": 2, "e": 6}
 
-        rows = formatter.format_info_comparison(fast, slow)
+        rows = formatter.format_info_comparison(fast, slow, batch, prepost)
 
-        # Expect 3 rows: a (match), b (mismatch), c (missing in fast)
-        self.assertEqual(len(rows), 3)
+        # Expect 5 rows: a, b, c, d, e
+        self.assertEqual(len(rows), 5)
 
-        # Check 'a' - match
+        # Check 'a' - match across all four
         row_a = next(r for r in rows if r[0] == "a")
-        self.assertEqual(row_a, ("a", "1", "1", False))
+        self.assertEqual(row_a, ("a", "1", "1", "1", "1", False))
 
-        # Check 'b' - mismatch
+        # Check 'b' - mismatch (fast/batch/prepost have 2, slow has 3)
         row_b = next(r for r in rows if r[0] == "b")
-        self.assertEqual(row_b, ("b", "2", "3", True))
+        self.assertEqual(row_b, ("b", "2", "2", "2", "3", True))
 
-        # Check 'c' - missing in fast
+        # Check 'c' - missing in fast/batch/prepost
         row_c = next(r for r in rows if r[0] == "c")
-        self.assertEqual(row_c, ("c", "N/A", "4", False))
+        self.assertEqual(row_c, ("c", "N/A", "N/A", "N/A", "4", False))
+
+        # Check 'd' - present only in batch
+        row_d = next(r for r in rows if r[0] == "d")
+        self.assertEqual(row_d, ("d", "N/A", "5", "N/A", "N/A", False))
+
+        # Check 'e' - present only in prepost
+        row_e = next(r for r in rows if r[0] == "e")
+        self.assertEqual(row_e, ("e", "N/A", "N/A", "6", "N/A", False))
 
         # Test error case
         rows_err = formatter.format_info_comparison({}, {})
@@ -246,7 +256,22 @@ class TestFormatter(unittest.IsolatedAsyncioTestCase):
 
         # Check that 'currency' was safely handled and set to "N/A" for fast_info
         row_currency = next(r for r in rows_raising if r[0] == "currency")
-        self.assertEqual(row_currency, ("currency", "N/A", "USD", False))
+        self.assertEqual(row_currency, ("currency", "N/A", "N/A", "N/A", "USD", False))
+
+        # Test handling of unhashable values (e.g. lists/dicts under keys like companyOfficers)
+        unhashable_fast = {"companyOfficers": [{"name": "A"}]}
+        unhashable_slow = {"companyOfficers": [{"name": "A"}]}
+        unhashable_batch = {"companyOfficers": [{"name": "B"}]}
+
+        # No mismatch
+        rows_no_mismatch = formatter.format_info_comparison(unhashable_fast, unhashable_slow)
+        row_co_no = next(r for r in rows_no_mismatch if r[0] == "companyOfficers")
+        self.assertFalse(row_co_no[5])
+
+        # Mismatch (different list content)
+        rows_mismatch = formatter.format_info_comparison(unhashable_fast, unhashable_slow, unhashable_batch)
+        row_co_yes = next(r for r in rows_mismatch if r[0] == "companyOfficers")
+        self.assertTrue(row_co_yes[5])
 
     def test_escape(self):
         """Test escaping special characters for Rich markdown."""
