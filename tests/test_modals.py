@@ -140,6 +140,92 @@ class TestModals(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(result, ("AAPL", "apple", "note", "tag"))
 
+    async def test_add_ticker_modal_empty_alias(self):
+        """Test the AddTickerModal when alias and note inputs are left blank."""
+        # Ensure that when alias and note are not set, they are returned as empty strings
+        # rather than being auto-filled with the ticker symbol or default strings.
+        app = ModalsTestApp()
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(r):
+                nonlocal result
+                result = r
+
+            await pilot.app.push_screen(AddTickerModal(), set_result)
+            await pilot.pause()
+            await pilot.press(
+                "a",
+                "a",
+                "p",
+                "l",
+            )
+            await pilot.click("#add")
+            await pilot.pause()
+            self.assertEqual(result, ("AAPL", "", "", ""))
+
+    async def test_add_ticker_modal_multi_ticker(self):
+        """Test the AddTickerModal with comma-separated tickers (multi-ticker mode).
+
+        When commas are present in the ticker input, the modal should return a list
+        of tuples instead of a single tuple, and alias/note should be empty for each."""
+        app = ModalsTestApp()
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(r):
+                nonlocal result
+                result = r
+
+            await pilot.app.push_screen(AddTickerModal(), set_result)
+            await pilot.pause()
+            # Type "AAPL,MSFT,GOOG" into the ticker input
+            await pilot.press(
+                "a", "a", "p", "l",
+                "comma",
+                "m", "s", "f", "t",
+                "comma",
+                "g", "o", "o", "g",
+            )
+            await pilot.click("#add")
+            await pilot.pause()
+            self.assertIsInstance(result, list)
+            self.assertEqual(len(result), 3)
+            self.assertEqual(result[0], ("AAPL", "", "", ""))
+            self.assertEqual(result[1], ("MSFT", "", "", ""))
+            self.assertEqual(result[2], ("GOOG", "", "", ""))
+
+    async def test_add_ticker_modal_multi_ticker_with_tags(self):
+        """Test that tags are applied to all tickers in multi-ticker mode.
+
+        Tags are NOT per-ticker specific (unlike alias/note), so they should
+        propagate to every ticker in the comma-separated list."""
+        app = ModalsTestApp()
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(r):
+                nonlocal result
+                result = r
+
+            await pilot.app.push_screen(AddTickerModal(), set_result)
+            await pilot.pause()
+            # Type "V,MA" into the ticker input
+            await pilot.press(
+                "v",
+                "comma",
+                "m", "a",
+            )
+            # Tab to tags input (alias/note are hidden, so one tab goes to tags)
+            await pilot.press("tab")
+            await pilot.press("t", "e", "c", "h")
+            await pilot.click("#add")
+            await pilot.pause()
+            self.assertIsInstance(result, list)
+            self.assertEqual(len(result), 2)
+            self.assertEqual(result[0], ("V", "", "", "tech"))
+            self.assertEqual(result[1], ("MA", "", "", "tech"))
+
     async def test_edit_ticker_modal(self):
         """Test the EditTickerModal."""
         app = ModalsTestApp()
