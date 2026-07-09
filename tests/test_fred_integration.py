@@ -1,6 +1,6 @@
 import unittest
-from unittest.mock import MagicMock, patch, call
-from stockstui.data_providers.fred_provider import get_series_summary, BASE_URL
+from unittest.mock import MagicMock, patch
+from stockstui.data_providers.fred_provider import get_series_summary
 
 
 class TestFredIntegration(unittest.TestCase):
