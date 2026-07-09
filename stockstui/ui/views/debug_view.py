@@ -48,7 +48,7 @@ class DebugView(Vertical):
                     dt = self.query_one("#debug-table", NavigableDataTable)
 
                     dt.clear()
-                    dt.add_columns("Info Key", "Fast", "Slow")
+                    dt.add_columns("Info Key", "Fast", "Batch", "PrePost", "Slow")
                     dt.loading = True
 
                     self.app.run_info_comparison_test(ticker)
