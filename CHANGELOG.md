@@ -1,5 +1,41 @@
 # Change Log
 
+## [0.1.0-b14] 2026-07-08
+
+### Added
+- `feat(config)`: Add global configuration setting and UI switch to enable/disable pre/post-market data fetching
+- `feat(stocks)`: Integrate pre/post-market and batch info into price fetching logic for both TUI and CLI
+- `feat(ui)`: Update Debug View comparison table to include "Batch" and "PrePost" data columns
+- `feat(ui)`: Add support for multi-ticker additions via comma-separated strings in the Add Ticker modal
+- `feat(db)`: Enable SQLite Write-Ahead Logging (WAL) and busy timeouts to improve concurrency and reduce "database is locked" errors
+
+### Fixed
+- `fix(fred_provider)`: Correctly handle FRED "N/A" sentinel (`.`) in change calculations to prevent inaccurate metrics
+- `fix(fred_provider)`: Implement network fallback to return cached data if the API request fails
+- `fix(db_manager)`: Implement field-level merging during cache updates to prevent overwriting stable metadata (like ATH or descriptions) with `None` values
+- `fix(ui)`: Prevent application crashes in `get_active_category` when encountering malformed tab maps or out-of-bounds indices
+- `fix(ui)`: Fix `KeyError` in FRED debug handler when processing observations with missing date or value keys
+- `fix(options-view)`: Fix missing dependency for date parsing
+- `fix(market-provider)`: Prevent pre-market quotes from being overwritten by stale historical data during the session transition
+
+### Changed
+- `refactor(ui)`: Generalize and simplify modal dialogs into reusable base classes (`ListModal`, `TickerModal`, `PortfolioModal`)
+- `refactor(market-provider)`: Optimize data fetching pipeline by batching API calls and separating stages (slow, fast, pre/post)
+- `refactor(config-view)`: Overhaul list configuration logic to improve error handling and column synchronization
+- `refactor(formatter)`: Expand info comparison logic to analyze and report inconsistencies across four data sources (fast, slow, batch, and pre/post)
+- `refactor(utils)`: Centralize stock data merging into a robust, defensive `merge_price_data` utility
+- `refactor(logging)`: Improve `TextualHandler` safety with better type hinting and application context handling
+
+### Test
+- `test(fred)`: Implement comprehensive regression tests for FRED provider, covering N/A handling, fallback logic, and cache efficiency
+- `test(app)`: Add regression tests for core navigation and exception handling in the main application state
+- `test(db_manager)`: Expand test suite to cover partial field updates, market hour exemptions (Futures/Crypto), and market cap recalculations
+- `test(modals)`: Add robust testing for multi-ticker input scenarios and tag propagation in modals
+- `test(config)`: Increase coverage for atomic configuration saves, default setting merges, and empty file handling
+- `test(market-provider)`: Update unit tests to validate data fidelity across expanded info comparison types
+- `test(utils)`: Enhance test coverage for slugification, tag parsing, and cell text extraction utilities
+- `test(comparison)`: Update message unit tests to reflect the inclusion of batch and pre/post info dictionaries
+
 ## [0.1.0-b13] 2026-06-15
 
 ### Added
