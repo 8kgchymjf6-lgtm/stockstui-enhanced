@@ -125,15 +125,90 @@ class TestConfigManager(unittest.TestCase):
         cm = ConfigManager(app_root=self.app_root)
 
         # Check if migration occurred by looking for the expected behavior
-        # This might vary based on actual implementation
         if "portfolios" in cm.portfolios and "default" in cm.portfolios["portfolios"]:
             default_tickers = cm.portfolios["portfolios"]["default"]["tickers"]
             # Check if any of our test tickers are in the default portfolio
-            test_tickers = ["AAPL", "MSFT", "BTC-USD"]
-            found_any = any(ticker in default_tickers for ticker in test_tickers)
-            self.assertTrue(
-                found_any, "At least one test ticker should be in default portfolio"
-            )
+            test_tickers = ["AAPL", "MSFT"]
+            for ticker in test_tickers:
+                self.assertIn(ticker, default_tickers)
             self.assertTrue(
                 cm.portfolios.get("settings", {}).get("migration_completed", False)
             )
+
+    def test_get_setting(self):
+        cm = ConfigManager(app_root=self.app_root)
+        self.assertEqual(cm.get_setting("theme"), self.default_settings["theme"])
+        self.assertEqual(cm.get_setting("non_existent", "default_val"), "default_val")
+
+    def test_save_lists_and_portfolios(self):
+        cm = ConfigManager(app_root=self.app_root)
+        cm.lists["new_list"] = []
+        cm.save_lists()
+        self.assertTrue((self.user_config_dir / "lists.json").exists())
+
+        cm.portfolios["new_p"] = {}
+        cm.save_portfolios()
+        self.assertTrue((self.user_config_dir / "portfolios.json").exists())
+
+    def test_merge_default_settings(self):
+        # User has some settings
+        user_settings = {"theme": "user_theme"}
+        (self.user_config_dir / "settings.json").write_text(json.dumps(user_settings))
+
+        # Default has more settings
+        default_settings = {
+            "theme": "default_theme",
+            "new_key": "new_val",
+            "column_settings": [{"key": "Col1", "visible": True}],
+        }
+        (self.default_dir / "settings.json").write_text(json.dumps(default_settings))
+
+        cm = ConfigManager(app_root=self.app_root)
+
+        self.assertEqual(cm.settings["theme"], "user_theme")
+        self.assertEqual(cm.settings["new_key"], "new_val")
+        self.assertEqual(cm.settings["column_settings"], default_settings["column_settings"])
+
+    def test_merge_column_settings(self):
+        # User has some column settings
+        user_settings = {
+            "column_settings": [{"key": "Col1", "visible": False}]
+        }
+        (self.user_config_dir / "settings.json").write_text(json.dumps(user_settings))
+
+        # Default has more column settings
+        default_settings = {
+            "column_settings": [
+                {"key": "Col1", "visible": True},
+                {"key": "Col2", "visible": True}
+            ]
+        }
+        (self.default_dir / "settings.json").write_text(json.dumps(default_settings))
+
+        cm = ConfigManager(app_root=self.app_root)
+
+        # Col1 should be preserved from user (visible: False), Col2 should be added
+        col_keys = [c["key"] for c in cm.settings["column_settings"]]
+        self.assertIn("Col1", col_keys)
+        self.assertIn("Col2", col_keys)
+
+        col1 = next(c for c in cm.settings["column_settings"] if c["key"] == "Col1")
+        self.assertFalse(col1["visible"])
+
+    def test_handles_empty_user_file(self):
+        settings_path = self.user_config_dir / "settings.json"
+        settings_path.write_text("") # Empty file
+
+        cm = ConfigManager(app_root=self.app_root)
+        # Should fall back to default settings
+        self.assertEqual(cm.settings["theme"], self.default_settings["theme"])
+        # Should have created a backup
+        self.assertTrue((self.user_config_dir / "settings.json.bak").exists())
+
+    def test_atomic_save_failure(self):
+        cm = ConfigManager(app_root=self.app_root)
+        # Mock os.replace to fail
+        with patch("os.replace", side_effect=OSError("Replace failed")):
+            with self.assertLogs(level="ERROR") as log:
+                cm._atomic_save("test.json", {"a": 1})
+                self.assertIn("Replace failed", log.output[0])
