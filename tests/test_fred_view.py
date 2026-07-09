@@ -1,7 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
 from textual.app import App
-from textual.widgets import Static
 from stockstui.ui.views.fred_view import FredView, FredDataTable
 
 
