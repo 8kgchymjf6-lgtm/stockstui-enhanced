@@ -12,11 +12,34 @@ CURRENCY_SYMBOLS = {
     "CAD": "C$",
     "AUD": "A$",
     "CHF": "CHF",
+    "DKK": "DKK",
     "CNY": "¥",
     "HKD": "HK$",
     "SGD": "S$",
     "INR": "₹",
 }
+
+def format_market_cap(value):
+    """Format market cap as T/B/M/K."""
+
+    if not isinstance(value, (int, float)):
+        return "N/A"
+
+    abs_value = abs(value)
+
+    if abs_value >= 1_000_000_000_000:
+        return f"{value / 1_000_000_000_000:.2f}T"
+
+    if abs_value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.2f}B"
+
+    if abs_value >= 1_000_000:
+        return f"{value / 1_000_000:.2f}M"
+
+    if abs_value >= 1_000:
+        return f"{value / 1_000:.2f}K"
+
+    return str(value)
 
 
 def get_currency_symbol(currency_code: str | None) -> str:
@@ -72,8 +95,14 @@ def format_price_data_for_table(
 
         day_low = item.get("day_low")
         day_high = item.get("day_high")
+        trailing_currencies = {"DKK", "CHF", "C$"}
+
         day_range_str = (
-            f"{sym}{day_low:,.2f} - {sym}{day_high:,.2f}"
+            (
+                f"{day_low:,.1f}–{day_high:,.1f} {sym}"
+                if sym in trailing_currencies
+                else f"{sym}{day_low:,.1f}–{day_high:,.1f}"
+            )
             if day_low is not None and day_high is not None
             else "N/A"
         )
@@ -81,19 +110,47 @@ def format_price_data_for_table(
         fifty_two_week_low = item.get("fifty_two_week_low")
         fifty_two_week_high = item.get("fifty_two_week_high")
         fifty_two_week_range_str = (
-            f"{sym}{fifty_two_week_low:,.2f} - {sym}{fifty_two_week_high:,.2f}"
+            (
+                f"{fifty_two_week_low:,.1f}–{fifty_two_week_high:,.1f} {sym}"
+                if sym in trailing_currencies
+                else f"{sym}{fifty_two_week_low:,.1f}–{fifty_two_week_high:,.1f}"
+            )
             if fifty_two_week_low is not None and fifty_two_week_high is not None
             else "N/A"
         )
 
         volume = item.get("volume")
-        volume_str = f"{volume:,}" if volume is not None else "N/A"
+        if isinstance(volume, (int, float)):
+            if abs(volume) >= 1_000_000_000:
+                volume_str = f"{volume / 1_000_000_000:.1f}B"
+            elif abs(volume) >= 1_000_000:
+                volume_str = f"{volume / 1_000_000:.1f}M"
+            elif abs(volume) >= 1_000:
+                volume_str = f"{volume / 1_000:.0f}K"
+            else:
+                volume_str = str(volume)
+        else:
+            volume_str = "N/A"
 
         open_price = item.get("open")
-        open_str = f"{sym}{open_price:,.2f}" if open_price is not None else "N/A"
+        open_str = (
+            (
+                f"{open_price:,.1f} {sym}"
+                if sym in trailing_currencies
+                else f"{sym}{open_price:,.1f}"
+            )
+            if open_price is not None
+            else "N/A"
+        )
 
         prev_close_str = (
-            f"{sym}{previous_close:,.2f}" if previous_close is not None else "N/A"
+            (
+                f"{previous_close:,.1f} {sym}"
+                if sym in trailing_currencies
+                else f"{sym}{previous_close:,.1f}"
+            )
+            if previous_close is not None
+            else "N/A"
         )
 
         all_time_high = item.get("all_time_high")
@@ -114,15 +171,18 @@ def format_price_data_for_table(
                 "Volume": volume_str,
                 "Open": open_str,
                 "Prev Close": prev_close_str,
-                "PE Ratio": f"{item.get('pe_ratio', 0):.2f}"
-                if item.get("pe_ratio")
-                else "N/A",
-                "Market Cap": f"{item.get('market_cap', 0):,}"
-                if item.get("market_cap")
-                else "N/A",
-                "Div Yield": f"{item.get('dividend_yield', 0):.2f}%"
-                if item.get("dividend_yield")
-                else "N/A",
+        "PE Ratio": (
+                    f"{item['pe_ratio']:.1f}"
+                    if isinstance(item.get("pe_ratio"), (int, float))
+                    else "N/A"
+                    ),
+                "Market Cap": format_market_cap(item.get("market_cap")),
+                "Div Yield": (
+                    f"{item['dividend_yield'] * 100:.1f}%"
+                    if isinstance(item.get("dividend_yield"), (int, float))
+                    and item["dividend_yield"] > 0
+                    else "N/A"
+                    ),
                 "EPS": f"{item.get('eps', 0):.2f}" if item.get("eps") else "N/A",
                 "Beta": f"{item.get('beta', 0):.2f}" if item.get("beta") else "N/A",
                 "All Time High": all_time_high,
@@ -417,23 +477,21 @@ def format_market_status(market_status: dict | None) -> tuple | None:
         "unknown": "text-muted",
     }
 
-    # Determine Primary Display "Open" or "Closed"
+    # Determine primary market status display
     if status_code == "open":
-        main_status = "Open"
+        main_status = "OPEN"
         style_var = status_map["open"]
-        reason_display = ""  # No reason needed for standard open state
+        reason_display = ""
     elif status_code == "pre":
-        main_status = "Closed"
-        style_var = status_map["closed"]
-        # Highlight Pre-Market activity distinct from the main closed status
-        reason_display = "(Pre-Market)"
+        main_status = "PRE"
+        style_var = status_map["pre"]
+        reason_display = ""
     elif status_code == "post":
-        main_status = "Closed"
-        style_var = status_map["closed"]
-        # Highlight Post-Market activity distinct from the main closed status
-        reason_display = "(Post Market)"
+        main_status = "AFTER"
+        style_var = status_map["post"]
+        reason_display = ""
     else:  # closed or unknown
-        main_status = "Closed"
+        main_status = "CLOSED"
         style_var = status_map["closed"]
         reason_display = ""
         if reason_code == "weekend":

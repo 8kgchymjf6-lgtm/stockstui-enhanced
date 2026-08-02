@@ -170,6 +170,8 @@ class StocksTUI(App):
         Binding("u", "handle_sort_key('u')", "Undo Sort", show=False),
         Binding("v", "handle_sort_key('v')", "Sort by Volume", show=False),
         Binding("o", "handle_sort_key('o')", "Sort by Open", show=False),
+        Binding("H", "handle_sort_key('H')", "Sort by High", show=False),
+        Binding("L", "handle_sort_key('L')", "Sort by Low", show=False),
         Binding("ctrl+c", "copy_text", "Copy", show=False),
         Binding("ctrl+C", "copy_text", "Copy", show=False),
         # FIX: Split the bindings. Escape has its own dedicated action.
@@ -236,7 +238,7 @@ class StocksTUI(App):
         self.option_positions = self.db_manager.get_all_option_positions()
         self._news_content_for_ticker: str | None = None
         self._last_news_content: tuple[Union[str, Text], list[str]] | None = None
-        self._sort_column_key: str | None = None
+        self._sort_column_key: str | None = "Description"
         self._sort_reverse: bool = False
         self._history_sort_column_key: str | None = None
         self._history_sort_reverse: bool = False
@@ -1520,8 +1522,14 @@ class StocksTUI(App):
                         text = Text(str(val))
                 elif col_key == "Price":
                     raw_price = val
+                    trailing_currencies = {"DKK", "CHF", "C$"}
                     text = (
-                        Text(f"{cur_sym}{raw_price:,.2f}", style=price_color, justify="right")
+                        Text(
+                            f"{raw_price:,.1f} {cur_sym}"
+                            if cur_sym in trailing_currencies
+                            else f"{cur_sym}{raw_price:,.1f}",
+                            justify="right",
+                        )
                         if raw_price is not None
                         else Text("N/A", style=muted_color, justify="right")
                     )
@@ -1549,20 +1557,32 @@ class StocksTUI(App):
                         text = Text("N/A", style=muted_color, justify="right")
                 elif col_key == "All Time High":
                     raw_ath = val
+                    trailing_currencies = {"DKK", "CHF", "C$"}
                     text = (
-                        Text(f"{cur_sym}{raw_ath:,.2f}", style=price_color, justify="right")
+                        Text(
+                            f"{raw_ath:,.1f} {cur_sym}"
+                            if cur_sym in trailing_currencies
+                            else f"{cur_sym}{raw_ath:,.1f}",
+                            justify="right",
+                        )
                         if raw_ath is not None
                         else Text("N/A", style=muted_color, justify="right")
                     )
                 elif col_key == "% Off ATH":
                     raw_pct = val
                     if raw_pct is not None:
-                        style = (
-                            error_color
-                            if raw_pct < 0
-                            else (success_color if raw_pct > 0 else "")
+                        if raw_pct >= -0.10:
+                            style = success_color
+                        elif raw_pct >= -0.30:
+                            style = "yellow"
+                        else:
+                            style = error_color
+
+                        text = Text(
+                            f"{raw_pct:.1%}",
+                            style=style,
+                            justify="right",
                         )
-                        text = Text(f"{raw_pct:.2%}", style=style, justify="right")
                     else:
                         text = Text("N/A", style=muted_color, justify="right")
                 elif col_key in [
@@ -1578,9 +1598,116 @@ class StocksTUI(App):
                         justify="right",
                     )
                 elif col_key == "Ticker":
-                    text = Text(str(val), style=muted_color)
+                    text = Text(
+                        str(val),
+                        style=muted_color,
+                        justify="left",
+                    )
+                elif col_key == "EPS":
+                    if val == "N/A":
+                        text = Text("N/A", style=muted_color, justify="right")
+                    else:
+                        try:
+                            eps_value = float(val)
+                            style = (
+                                success_color
+                                if eps_value > 0
+                                else (error_color if eps_value < 0 else "")
+                            )
+                            text = Text(
+                                f"{eps_value:.2f}",
+                                style=style,
+                                justify="right",
+                            )
+                        except (TypeError, ValueError):
+                            text = Text(
+                                str(val),
+                                style=muted_color,
+                                justify="right",
+                            )
+                elif col_key == "PE Ratio":
+                    if val == "N/A":
+                        text = Text("N/A", style=muted_color, justify="right")
+                    else:
+                        try:
+                            pe_value = float(val)
+
+                            if pe_value < 15:
+                                style = success_color
+                            elif pe_value <= 30:
+                                style = "yellow"
+                            else:
+                                style = error_color
+
+                            text = Text(
+                                f"{pe_value:.1f}",
+                                style=style,
+                                justify="right",
+                            )
+                        except (TypeError, ValueError):
+                            text = Text(
+                                str(val),
+                                style=muted_color,
+                                justify="right",
+                            )
+                elif col_key == "Beta":
+                    if val == "N/A":
+                        text = Text("N/A", style=muted_color, justify="right")
+                    else:
+                        try:
+                            beta_value = float(val)
+
+                            if beta_value < 1.0:
+                                style = success_color
+                            elif beta_value < 1.5:
+                                style = ""
+                            elif beta_value < 2.0:
+                                style = "yellow"
+                            else:
+                                style = error_color
+
+                            text = Text(
+                                f"{beta_value:.2f}",
+                                style=style,
+                                justify="right",
+                            )
+                        except (TypeError, ValueError):
+                            text = Text(
+                                str(val),
+                                style=muted_color,
+                                justify="right",
+                            )
+                elif col_key == "Div Yield":
+                    if val == "N/A":
+                        text = Text("N/A", style=muted_color, justify="right")
+                    else:
+                        try:
+                            yield_value = float(str(val).rstrip("%"))
+
+                            if yield_value >= 4.0:
+                                style = success_color
+                            elif yield_value >= 2.0:
+                                style = "yellow"
+                            else:
+                                style = ""
+
+                            text = Text(
+                                str(val),
+                                style=style,
+                                justify="right",
+                            )
+                        except (TypeError, ValueError):
+                            text = Text(
+                                str(val),
+                                style=muted_color,
+                                justify="right",
+                            )
                 else:
-                    text = Text(str(val))
+                    text = Text(
+                        str(val),
+                        style=muted_color if val == "N/A" else "",
+                        justify="right",
+                    )
 
                 row_values.append(text)
 
@@ -2057,15 +2184,35 @@ class StocksTUI(App):
                     return (1, 0)
                 if self._sort_column_key in ("Description", "Ticker"):
                     return (0, text_content.lower())
-                cleaned_text = re.sub(r"^[^\d\.\-]+", "", text_content)
-                cleaned_text = (
-                    cleaned_text.replace(",", "")
-                    .replace("%", "")
-                    .replace("+", "")
+                number_match = re.search(
+                    r"[-+]?\d[\d,]*(?:\.\d+)?\s*([KMBT])?",
+                    text_content,
+                    re.IGNORECASE,
                 )
+                if not number_match:
+                    return (1, 0)
+
                 try:
-                    return (0, float(cleaned_text))
-                except (ValueError, TypeError):
+                    numeric_text = number_match.group(0)
+                    suffix = (number_match.group(1) or "").upper()
+                    numeric_text = re.sub(
+                        r"\s*[KMBT]\s*$",
+                        "",
+                        numeric_text,
+                        flags=re.IGNORECASE,
+                    )
+                    numeric_value = float(numeric_text.replace(",", ""))
+
+                    multipliers = {
+                        "": 1,
+                        "K": 1_000,
+                        "M": 1_000_000,
+                        "B": 1_000_000_000,
+                        "T": 1_000_000_000_000,
+                    }
+
+                    return (0, numeric_value * multipliers[suffix])
+                except (ValueError, TypeError, KeyError):
                     return (1, 0)
 
             table.sort(key=sort_key, reverse=self._sort_reverse)
@@ -2169,7 +2316,7 @@ class StocksTUI(App):
         except NoMatches:
             pass
 
-        self._sort_column_key = None
+        self._sort_column_key = "Description"
         self._sort_reverse = False
         self._history_sort_column_key = None
         self._history_sort_reverse = False
@@ -2231,6 +2378,13 @@ class StocksTUI(App):
                 "Volume",
                 "Open",
                 "Prev Close",
+                "PE Ratio",
+                "Market Cap",
+                "Div Yield",
+                "EPS",
+                "Beta",
+                "All Time High",
+                "% Off ATH",
             }
             self._sort_reverse = column_key_str in numeric_columns
 
@@ -2319,7 +2473,11 @@ class StocksTUI(App):
             return
 
     async def action_enter_open_mode(self) -> None:
-        """Enters 'open mode', or if already in open mode, opens the ticker in Options."""
+        """Enters open mode, or sorts by Open while sort mode is active."""
+        if self._sort_mode:
+            await self.action_handle_sort_key("o")
+            return
+
         # If already in open mode, treat this as 'open in options'
         if self._open_mode:
             await self.action_handle_open_key("o")
@@ -2446,6 +2604,15 @@ class StocksTUI(App):
             return
 
         column_key_str = column_map[key][target_view]
+
+        if target_view == "price" and column_key_str not in self._visible_columns:
+            self.notify(
+                f"{column_key_str} column is hidden.",
+                severity="warning",
+            )
+            self.action_back_or_dismiss()
+            return
+
         if target_view == "history":
             self._set_and_apply_history_sort(column_key_str, f"key '{key}'")
         else:

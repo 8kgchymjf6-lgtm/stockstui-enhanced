@@ -290,14 +290,23 @@ def _fetch_and_cache_slow_data(tickers: list[str]):
                     "open": fi.get("open") or si.get("open"),
                     "fifty_two_week_low": si.get("fiftyTwoWeekLow"),
                     "fifty_two_week_high": si.get("fiftyTwoWeekHigh"),
-                    "pe_ratio": si.get("trailingPE") or si.get("forwardPE"),
+                    "pe_ratio": (
+                         si.get("trailingPE")
+                         if isinstance(si.get("trailingPE"), (int, float))
+                         else si.get("forwardPE")
+                 ),
                     "shares": shares,
                     # Fallback to API-reported market cap if price or shares is missing/None
                     "market_cap": (shares * (fi.get("lastPrice") or si.get("currentPrice") or si.get("regularMarketPrice")))
                     if shares and (fi.get("lastPrice") or si.get("currentPrice") or si.get("regularMarketPrice"))
                     else (fi.get("marketCap") or si.get("marketCap")),
-                    "dividend_yield": fi.get("dividendYield")
-                    or si.get("trailingAnnualDividendYield"),
+                    "dividend_yield": (
+                        si.get("dividendYield") / 100
+                        if isinstance(si.get("dividendYield"), (int, float))
+                        else si.get("trailingAnnualDividendYield")
+                        if isinstance(si.get("trailingAnnualDividendYield"), (int, float))
+                        else None
+                        ),
                     "eps": si.get("trailingEps") or si.get("forwardEps"),
                     "beta": si.get("beta") or si.get("beta3Year"),
                     "all_time_high": si.get("allTimeHigh"),
