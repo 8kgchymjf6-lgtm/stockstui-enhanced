@@ -18,3 +18,7 @@ run.sh
 mutants/
 .mypy_cache/
 .ruff_cache/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
