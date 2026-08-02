@@ -1,7 +1,19 @@
 # stocksTUI
-> This repository contains a locally maintained enhanced edition.
-> See [`docs/README-ENHANCED.md`](docs/README-ENHANCED.md) for the local
-> modifications, validation status, and enhanced-version documentation.
+> **Note**
+>
+> This repository contains a locally maintained enhanced edition of
+> **stocksTUI**.
+>
+> Additional enhanced documentation is available in the
+> [`docs/`](docs/) directory, including:
+>
+> - Project overview
+> - Technical documentation
+> - Validation
+> - Testing
+> - Maintenance
+> - Credits
+> - Enhanced changelog
 
 ---
 
