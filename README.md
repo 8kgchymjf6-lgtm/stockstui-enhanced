@@ -1,4 +1,9 @@
 # stocksTUI
+> This repository contains a locally maintained enhanced edition.
+> See [`docs/README-ENHANCED.md`](docs/README-ENHANCED.md) for the local
+> modifications, validation status, and enhanced-version documentation.
+
+---
 
 A fast, minimalist terminal app for checking stock prices, crypto, news, and historical charts — without leaving your shell. Built with [Textual](https://github.com/textualize/textual), powered by [yfinance](https://github.com/ranaroussi/yfinance), and made for people who prefer the command line over CNBC.
 
