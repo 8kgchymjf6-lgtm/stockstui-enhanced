@@ -1604,7 +1604,7 @@ class StocksTUI(App):
                         justify="left",
                     )
                 elif col_key == "EPS":
-                    if val == "N/A":
+                    if val is None or val == "N/A":
                         text = Text("N/A", style=muted_color, justify="right")
                     else:
                         try:
@@ -1626,7 +1626,7 @@ class StocksTUI(App):
                                 justify="right",
                             )
                 elif col_key == "PE Ratio":
-                    if val == "N/A":
+                    if val is None or val == "N/A":
                         text = Text("N/A", style=muted_color, justify="right")
                     else:
                         try:
@@ -1651,7 +1651,7 @@ class StocksTUI(App):
                                 justify="right",
                             )
                 elif col_key == "Beta":
-                    if val == "N/A":
+                    if val is None or val == "N/A":
                         text = Text("N/A", style=muted_color, justify="right")
                     else:
                         try:
