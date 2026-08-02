@@ -51,6 +51,7 @@ class TestAppStartup(unittest.IsolatedAsyncioTestCase):
 
     async def test_startup_with_tab_override(self):
         app = self._setup_test_app(cli_overrides={"tab": "crypto"})
+        app.config.lists["crypto"] = []
         async with app.run_test() as pilot:
             await pilot.pause()
             self.assertEqual(app.get_active_category(), "crypto")

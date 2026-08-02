@@ -29,9 +29,9 @@ class TestColumns(unittest.TestCase):
         rows = formatter.format_price_data_for_table(data, old_prices, alias_map)
         self.assertIsInstance(rows[0], dict)
         self.assertEqual(rows[0]["Ticker"], "AAPL")
-        self.assertEqual(rows[0]["Volume"], "1,000,000")
-        self.assertEqual(rows[0]["Open"], "$149.00")
-        self.assertEqual(rows[0]["Prev Close"], "$145.00")
+        self.assertEqual(rows[0]["Volume"], "1.0M")
+        self.assertEqual(rows[0]["Open"], "$149.0")
+        self.assertEqual(rows[0]["Prev Close"], "$145.0")
         self.assertEqual(rows[0]["Price"], 150.0)  # Raw value
 
     def test_config_manager_merges_defaults(self):

@@ -75,8 +75,8 @@ class TestFormatter(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["Price"], 155.25)
         self.assertAlmostEqual(row["Change"], 5.25)
         self.assertAlmostEqual(row["% Change"], 5.25 / 150.0)
-        self.assertEqual(row["Day's Range"], "$154.00 - $156.00")
-        self.assertEqual(row["52-Wk Range"], "$120.00 - $180.00")
+        self.assertEqual(row["Day's Range"], "$154.0–156.0")
+        self.assertEqual(row["52-Wk Range"], "$120.0–180.0")
         self.assertEqual(row["Ticker"], "AAPL")
         self.assertEqual(
             row["_change_direction"], "up"
