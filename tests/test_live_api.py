@@ -1,7 +1,12 @@
+import os
 import unittest
 from stockstui.data_providers import market_provider
 
 
+@unittest.skipUnless(
+    os.getenv("RUN_LIVE_TESTS") == "1",
+    "Live API-tests køres kun med RUN_LIVE_TESTS=1",
+)
 class TestLiveApiIntegration(unittest.TestCase):
     """
     A suite of tests that make real network calls to the yfinance API.
