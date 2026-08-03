@@ -172,5 +172,159 @@ class TestOptionsProvider(unittest.TestCase):
             logging.disable(logging.NOTSET)
 
 
+    @patch("stockstui.data_providers.options_provider.yf.Ticker")
+    def test_get_available_expirations_empty_result(self, mock_ticker):
+        """An empty expirations response should return None."""
+        mock_ticker.return_value.options = ()
+
+        result = options_provider.get_available_expirations("AAPL")
+
+        self.assertIsNone(result)
+        self.assertNotIn("AAPL", options_provider._expirations_cache)
+
+    @patch("stockstui.data_providers.options_provider.yf.Ticker")
+    def test_stale_expirations_cache_is_ignored(self, mock_ticker):
+        """Expired cached expirations should be replaced with fresh data."""
+        options_provider._expirations_cache["AAPL"] = {
+            "data": ("OLD",),
+            "timestamp": (
+                time.time()
+                - options_provider.OPTIONS_CACHE_TTL
+                - 1
+            ),
+        }
+        mock_ticker.return_value.options = ("2026-09-18",)
+
+        result = options_provider.get_available_expirations("aapl")
+
+        self.assertEqual(result, ("2026-09-18",))
+        mock_ticker.assert_called_once_with("aapl")
+
+    def test_calculate_greeks_returns_early_for_invalid_inputs(self):
+        """Empty data or missing underlying price should be returned unchanged."""
+        empty_df = pd.DataFrame()
+
+        self.assertIsNone(
+            options_provider._calculate_greeks_for_chain(
+                None, 100.0, "2026-09-18", "c"
+            )
+        )
+        self.assertIs(
+            options_provider._calculate_greeks_for_chain(
+                empty_df, 100.0, "2026-09-18", "c"
+            ),
+            empty_df,
+        )
+
+        populated_df = pd.DataFrame(
+            {"strike": [100.0], "impliedVolatility": [0.2]}
+        )
+        self.assertIs(
+            options_provider._calculate_greeks_for_chain(
+                populated_df, None, "2026-09-18", "c"
+            ),
+            populated_df,
+        )
+
+    @patch(
+        "stockstui.data_providers.options_provider."
+        "black_scholes.calculate_greeks"
+    )
+    def test_invalid_expiration_date_uses_zero_time(
+        self, mock_calculate_greeks
+    ):
+        """An invalid date should still calculate Greeks with T equal to zero."""
+        mock_calculate_greeks.return_value = {
+            "delta": 0.0,
+            "gamma": 0.0,
+            "theta": 0.0,
+            "vega": 0.0,
+        }
+
+        frame = pd.DataFrame(
+            {"strike": [100.0], "impliedVolatility": [0.2]}
+        )
+
+        result = options_provider._calculate_greeks_for_chain(
+            frame,
+            105.0,
+            "not-a-date",
+            "c",
+        )
+
+        self.assertIn("delta", result.columns)
+        self.assertEqual(
+            mock_calculate_greeks.call_args.kwargs["T"],
+            0,
+        )
+
+    def test_get_options_chain_uses_fresh_cache(self):
+        """A fresh cached options chain should be returned directly."""
+        cached_result = {
+            "calls": "cached calls",
+            "puts": "cached puts",
+            "underlying": {},
+            "expiration": "2026-09-18",
+        }
+        options_provider._options_cache["AAPL_2026-09-18"] = {
+            "data": cached_result,
+            "timestamp": time.time(),
+        }
+
+        with patch(
+            "stockstui.data_providers.options_provider.yf.Ticker"
+        ) as mock_ticker:
+            result = options_provider.get_options_chain(
+                "aapl",
+                "2026-09-18",
+            )
+
+        self.assertIs(result, cached_result)
+        mock_ticker.assert_not_called()
+
+    @patch("stockstui.data_providers.options_provider.yf.Ticker")
+    def test_get_options_chain_without_date_skips_greeks(
+        self, mock_ticker
+    ):
+        """A nearest-expiration request should return without Greek calculation."""
+        mock_chain = MagicMock()
+        mock_chain.calls = pd.DataFrame(
+            {"strike": [100.0], "impliedVolatility": [0.2]}
+        )
+        mock_chain.puts = pd.DataFrame(
+            {"strike": [100.0], "impliedVolatility": [0.2]}
+        )
+        mock_chain.underlying = {"regularMarketPrice": 105.0}
+        mock_ticker.return_value.option_chain.return_value = mock_chain
+
+        with patch(
+            "stockstui.data_providers.options_provider."
+            "_calculate_greeks_for_chain"
+        ) as mock_greeks:
+            result = options_provider.get_options_chain("AAPL")
+
+        self.assertIsNotNone(result)
+        self.assertIsNone(result["expiration"])
+        mock_greeks.assert_not_called()
+
+    @patch("stockstui.data_providers.options_provider.yf.Ticker")
+    def test_get_options_chain_value_error(self, mock_ticker):
+        """Invalid expiration errors should return None."""
+        mock_ticker.return_value.option_chain.side_effect = ValueError(
+            "invalid expiration"
+        )
+
+        with patch(
+            "stockstui.data_providers.options_provider.logging.error"
+        ) as log_error:
+            result = options_provider.get_options_chain(
+                "AAPL",
+                "1900-01-01",
+            )
+
+        self.assertIsNone(result)
+        log_error.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
