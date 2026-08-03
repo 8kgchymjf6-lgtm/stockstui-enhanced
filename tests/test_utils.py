@@ -13,6 +13,7 @@ from stockstui.utils import (
     parse_tags,
     format_tags,
     match_tags,
+    merge_price_data,
 )
 
 # Define the root path of the application package.
@@ -148,6 +149,131 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(format_tags(["tech", "growth"]), "tech, growth")
         self.assertEqual(format_tags([]), "")
         self.assertEqual(format_tags(["single"]), "single")
+
+
+    def test_merge_price_data_invalid_existing_all_time_high(self):
+        """A valid new high should replace an unreadable cached high."""
+        existing = {
+            "price": 100.0,
+            "all_time_high": "invalid",
+        }
+        new_data = {
+            "all_time_high": 150.0,
+        }
+
+        result = merge_price_data(existing, new_data)
+
+        self.assertEqual(result["all_time_high"], 150.0)
+        self.assertEqual(
+            existing["all_time_high"],
+            "invalid",
+            "The original dictionary must not be mutated",
+        )
+
+    def test_merge_price_data_ignores_invalid_new_all_time_high(self):
+        """Unreadable new all-time-high values must not corrupt the cache."""
+        existing = {
+            "price": 100.0,
+            "all_time_high": 150.0,
+        }
+
+        result = merge_price_data(
+            existing,
+            {"all_time_high": "not-a-number"},
+        )
+
+        self.assertEqual(result["all_time_high"], 150.0)
+
+    def test_merge_price_data_ignores_invalid_price_fields(self):
+        """Malformed comparison fields should not break high validation."""
+        existing = {
+            "all_time_high": 150.0,
+            "price": 100.0,
+        }
+        new_data = {
+            "price": "invalid",
+            "day_high": object(),
+            "fifty_two_week_high": None,
+        }
+
+        result = merge_price_data(existing, new_data)
+
+        self.assertEqual(result["all_time_high"], 150.0)
+        self.assertEqual(result["price"], "invalid")
+        self.assertIs(result["day_high"], new_data["day_high"])
+        self.assertNotIn("fifty_two_week_high", result)
+
+    def test_merge_price_data_raises_high_from_price_fields(self):
+        """Observed market highs should correct a stale cached all-time high."""
+        existing = {
+            "all_time_high": 150.0,
+            "price": 145.0,
+            "day_high": 148.0,
+            "fifty_two_week_high": 149.0,
+        }
+        new_data = {
+            "price": 160.0,
+            "day_high": 170.0,
+            "fifty_two_week_high": 165.0,
+        }
+
+        result = merge_price_data(existing, new_data)
+
+        self.assertEqual(result["all_time_high"], 170.0)
+
+    def test_merge_price_data_preserves_values_when_update_is_none(self):
+        """None values must not overwrite valid cached market data."""
+        existing = {
+            "price": 100.0,
+            "day_high": 105.0,
+            "all_time_high": 150.0,
+        }
+        new_data = {
+            "price": None,
+            "day_high": None,
+            "all_time_high": None,
+            "volume": 1000,
+        }
+
+        result = merge_price_data(existing, new_data)
+
+        self.assertEqual(result["price"], 100.0)
+        self.assertEqual(result["day_high"], 105.0)
+        self.assertEqual(result["all_time_high"], 150.0)
+        self.assertEqual(result["volume"], 1000)
+
+    def test_merge_price_data_accepts_first_valid_all_time_high(self):
+        """A positive high should be stored when no cached high exists."""
+        result = merge_price_data(
+            {"price": 100.0},
+            {"all_time_high": 125.0},
+        )
+
+        self.assertEqual(result["all_time_high"], 125.0)
+
+    def test_merge_price_data_rejects_non_positive_all_time_high(self):
+        """Zero or negative highs must not replace a valid cached high."""
+        existing = {"all_time_high": 150.0}
+
+        for invalid_high in (0, -10):
+            with self.subTest(invalid_high=invalid_high):
+                result = merge_price_data(
+                    existing,
+                    {"all_time_high": invalid_high},
+                )
+                self.assertEqual(result["all_time_high"], 150.0)
+
+    def test_merge_price_data_handles_invalid_cached_all_time_high(self):
+        """An unreadable cached high should not crash final validation."""
+        existing = {
+            "all_time_high": "invalid",
+            "price": 100.0,
+        }
+
+        result = merge_price_data(existing, {})
+
+        self.assertEqual(result["all_time_high"], "invalid")
+        self.assertEqual(result["price"], 100.0)
 
     def test_match_tags(self):
         item_tags = ["tech", "growth"]
