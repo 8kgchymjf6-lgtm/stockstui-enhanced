@@ -212,3 +212,146 @@ class TestConfigManager(unittest.TestCase):
             with self.assertLogs(level="ERROR") as log:
                 cm._atomic_save("test.json", {"a": 1})
                 self.assertIn("Replace failed", log.output[0])
+
+
+    def test_merge_defaults_handles_invalid_default_json(self):
+        """Invalid default settings during merging should be logged, not raised."""
+        (self.user_config_dir / "settings.json").write_text(
+            json.dumps({"theme": "user_theme"})
+        )
+        (self.default_dir / "settings.json").write_text("{invalid json")
+
+        with self.assertLogs(level="ERROR") as logs:
+            cm = stockstui.config_manager.ConfigManager(
+                app_root=self.app_root
+            )
+
+        self.assertEqual(cm.settings["theme"], "user_theme")
+        self.assertTrue(
+            any(
+                "Failed to merge default settings" in message
+                for message in logs.output
+            )
+        )
+
+    def test_corrupted_file_backup_failure_still_restores_default(self):
+        """A failed backup must not prevent restoration from defaults."""
+        settings_path = self.user_config_dir / "settings.json"
+        settings_path.write_text("{broken json")
+
+        original_replace = stockstui.config_manager.os.replace
+
+        def replace_side_effect(source, destination):
+            if str(destination).endswith(".bak"):
+                raise OSError("backup failed")
+            return original_replace(source, destination)
+
+        with patch(
+            "stockstui.config_manager.os.replace",
+            side_effect=replace_side_effect,
+        ), self.assertLogs(level="ERROR") as logs:
+            cm = stockstui.config_manager.ConfigManager(
+                app_root=self.app_root
+            )
+
+        self.assertEqual(
+            cm.settings["theme"],
+            self.default_settings["theme"],
+        )
+        self.assertTrue(
+            any(
+                "Could not back up corrupted file" in message
+                for message in logs.output
+            )
+        )
+
+    def test_invalid_default_file_returns_empty_dict(self):
+        """A malformed default file should produce an empty config safely."""
+        filename = "broken.json"
+        (self.default_dir / filename).write_text("{invalid json")
+
+        cm = stockstui.config_manager.ConfigManager.__new__(
+            stockstui.config_manager.ConfigManager
+        )
+        cm.user_config_dir = self.user_config_dir
+        cm.default_dir = self.default_dir
+
+        with self.assertLogs(level="ERROR") as logs:
+            result = cm._load_or_create(filename)
+
+        self.assertEqual(result, {})
+        self.assertTrue(
+            any(
+                "Failed to create user config" in message
+                for message in logs.output
+            )
+        )
+
+    def test_missing_default_file_returns_empty_dict(self):
+        """A missing default file should return an empty config."""
+        cm = stockstui.config_manager.ConfigManager.__new__(
+            stockstui.config_manager.ConfigManager
+        )
+        cm.user_config_dir = self.user_config_dir
+        cm.default_dir = self.default_dir
+
+        with self.assertLogs(level="CRITICAL"):
+            result = cm._load_or_create("missing.json")
+
+        self.assertEqual(result, {})
+
+    def test_migration_returns_when_portfolios_structure_is_missing(self):
+        """Migration should do nothing when the portfolios root is absent."""
+        cm = stockstui.config_manager.ConfigManager.__new__(
+            stockstui.config_manager.ConfigManager
+        )
+        cm.portfolios = {}
+        cm.lists = {"stocks": [{"ticker": "AAPL"}]}
+
+        with patch.object(cm, "save_portfolios") as save_mock:
+            cm._migrate_stocks_to_default_portfolio()
+
+        save_mock.assert_not_called()
+
+    def test_migration_returns_when_already_completed(self):
+        """Completed migrations should not run or save again."""
+        cm = stockstui.config_manager.ConfigManager.__new__(
+            stockstui.config_manager.ConfigManager
+        )
+        cm.portfolios = {
+            "portfolios": {"default": {"tickers": []}},
+            "settings": {"migration_completed": True},
+        }
+        cm.lists = {"stocks": [{"ticker": "AAPL"}]}
+
+        with patch.object(cm, "save_portfolios") as save_mock:
+            cm._migrate_stocks_to_default_portfolio()
+
+        save_mock.assert_not_called()
+
+    def test_migration_marks_complete_without_stock_tickers(self):
+        """Migration should complete safely when no usable stock tickers exist."""
+        cm = stockstui.config_manager.ConfigManager.__new__(
+            stockstui.config_manager.ConfigManager
+        )
+        cm.portfolios = {
+            "portfolios": {"default": {"tickers": []}}
+        }
+        cm.lists = {
+            "stocks": [
+                {"name": "Missing ticker"},
+                {},
+            ]
+        }
+
+        with patch.object(cm, "save_portfolios") as save_mock:
+            cm._migrate_stocks_to_default_portfolio()
+
+        self.assertTrue(
+            cm.portfolios["settings"]["migration_completed"]
+        )
+        self.assertEqual(
+            cm.portfolios["portfolios"]["default"]["tickers"],
+            [],
+        )
+        save_mock.assert_called_once()
