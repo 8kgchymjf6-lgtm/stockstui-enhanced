@@ -339,6 +339,175 @@ class TestModals(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(result, (0.0, 0.0))
 
+
+    async def test_quick_edit_ticker_modal_note_field(self):
+        """Switching to note should load the note and allow an empty value."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            modal = QuickEditTickerModal(
+                "AAPL",
+                "stocks",
+                {
+                    "alias": "Apple",
+                    "note": "Long-term holding",
+                    "tags": "tech",
+                },
+            )
+            await pilot.app.push_screen(modal)
+            await pilot.pause()
+
+            field_select = modal.query_one("#field-select")
+            field_select.value = "note"
+            await pilot.pause()
+
+            value_input = modal.query_one("#value-input")
+            self.assertEqual(value_input.value, "Long-term holding")
+            self.assertEqual(value_input.validators, [])
+
+    async def test_quick_edit_ticker_modal_tags_field(self):
+        """Switching to tags should load tags and remove alias validation."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            modal = QuickEditTickerModal(
+                "AAPL",
+                "stocks",
+                {
+                    "alias": "Apple",
+                    "note": "",
+                    "tags": "tech, growth",
+                },
+            )
+            await pilot.app.push_screen(modal)
+            await pilot.pause()
+
+            field_select = modal.query_one("#field-select")
+            field_select.value = "tags"
+            await pilot.pause()
+
+            value_input = modal.query_one("#value-input")
+            self.assertEqual(value_input.value, "tech, growth")
+            self.assertEqual(value_input.validators, [])
+
+    async def test_quick_edit_ticker_modal_alias_field_restores_validator(self):
+        """Returning to alias should restore its value and NotEmpty validator."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            modal = QuickEditTickerModal(
+                "AAPL",
+                "stocks",
+                {
+                    "alias": "Apple",
+                    "note": "Note",
+                    "tags": "tech",
+                },
+            )
+            await pilot.app.push_screen(modal)
+            await pilot.pause()
+
+            field_select = modal.query_one("#field-select")
+            field_select.value = "note"
+            await pilot.pause()
+            field_select.value = "alias"
+            await pilot.pause()
+
+            value_input = modal.query_one("#value-input")
+            self.assertEqual(value_input.value, "Apple")
+            self.assertEqual(len(value_input.validators), 1)
+
+    async def test_quick_edit_ticker_modal_cancel(self):
+        """Cancel should dismiss the modal with None."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = "unchanged"
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            await pilot.app.push_screen(
+                QuickEditTickerModal(
+                    "AAPL",
+                    "stocks",
+                    {"alias": "Apple"},
+                ),
+                set_result,
+            )
+            await pilot.pause()
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+            self.assertIsNone(result)
+
+    async def test_quick_edit_ticker_modal_rejects_empty_alias(self):
+        """Whitespace-only aliases should not dismiss the modal."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = QuickEditTickerModal(
+                "AAPL",
+                "stocks",
+                {"alias": "Apple"},
+            )
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            value_input = modal.query_one("#value-input")
+            value_input.value = "   "
+
+            await pilot.click("#save")
+            await pilot.pause()
+
+            self.assertIsNone(result)
+            self.assertIs(pilot.app.screen, modal)
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+    async def test_quick_edit_ticker_modal_formats_tags(self):
+        """Saved tags should be parsed, normalized, and deduplicated."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = QuickEditTickerModal(
+                "AAPL",
+                "stocks",
+                {
+                    "alias": "Apple",
+                    "tags": "old",
+                },
+            )
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            field_select = modal.query_one("#field-select")
+            field_select.value = "tags"
+            await pilot.pause()
+
+            value_input = modal.query_one("#value-input")
+            value_input.value = "Tech; growth, TECH"
+
+            await pilot.click("#save")
+            await pilot.pause()
+
+            self.assertEqual(result, ("tags", "tech, growth"))
+
     async def test_quick_edit_ticker_modal(self):
         """Test the QuickEditTickerModal."""
         app = ModalsTestApp()
