@@ -475,9 +475,13 @@ class FredSeriesModal(ModalScreen[str | None]):
             self.dismiss(None)
         elif event.button.id == "submit":
             input_widget = self.query_one("#fred-series-input", Input)
-            if input_widget.is_valid:
+            validation_result = input_widget.validate(input_widget.value)
+
+            if validation_result.is_valid:
                 self.dismiss(input_widget.value.strip().upper())
             else:
-                # Show validation errors
-                for error in input_widget.errors:
-                    self.app.notify(str(error), severity="error")
+                for failure in validation_result.failures:
+                    self.app.notify(
+                        failure.description,
+                        severity="error",
+                    )

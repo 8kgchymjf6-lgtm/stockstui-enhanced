@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import MagicMock, patch
 
 from textual.app import App
 from stockstui.ui.modals import (
@@ -9,6 +10,10 @@ from stockstui.ui.modals import (
     EditTickerModal,
     CreatePortfolioModal,
     EditPortfolioModal,
+    AddFredSeriesModal,
+    CompareInfoModal,
+    ConfirmAddToAllPortfoliosModal,
+    FredSeriesModal,
 )
 from stockstui.ui.position_modal import PositionModal
 from stockstui.ui.quick_edit_ticker_modal import QuickEditTickerModal
@@ -26,6 +31,498 @@ class TestModals(unittest.IsolatedAsyncioTestCase):
     These tests verify that modals compose correctly and return the expected
     data when their buttons are pressed.
     """
+
+
+    async def test_confirm_delete_modal_requires_matching_text(self):
+        """Delete should remain disabled until the exact item name is entered."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            modal = ConfirmDeleteModal(
+                "AAPL",
+                "Delete AAPL?",
+                require_typing=True,
+            )
+            await pilot.app.push_screen(modal)
+            await pilot.pause()
+
+            delete_button = modal.query_one("#delete")
+            confirmation_input = modal.query_one("#confirmation_input")
+
+            self.assertTrue(delete_button.disabled)
+
+            confirmation_input.value = "MSFT"
+            await pilot.pause()
+            self.assertTrue(delete_button.disabled)
+
+            confirmation_input.value = "AAPL"
+            await pilot.pause()
+            self.assertFalse(delete_button.disabled)
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+    async def test_add_list_modal_rejects_empty_name(self):
+        """An empty list name should not dismiss the modal."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = AddListModal()
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            await pilot.click("#add")
+            await pilot.pause()
+
+            self.assertIsNone(result)
+            self.assertIs(pilot.app.screen, modal)
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+    async def test_add_ticker_modal_cancel(self):
+        """Cancel should dismiss the ticker modal with None."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = "unchanged"
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            await pilot.app.push_screen(
+                AddTickerModal(),
+                set_result,
+            )
+            await pilot.pause()
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+            self.assertIsNone(result)
+
+    async def test_add_ticker_modal_portfolio_context(self):
+        """Portfolio mode should return ticker and tags without alias or note."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = AddTickerModal(context="portfolio")
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            self.assertEqual(len(modal.query("#alias-input")), 0)
+            self.assertEqual(len(modal.query("#note-input")), 0)
+
+            modal.query_one("#ticker-input").value = "aapl"
+            modal.query_one("#tags-input").value = "Tech; growth"
+            await pilot.pause()
+
+            await pilot.click("#add")
+            await pilot.pause()
+
+            self.assertEqual(
+                result,
+                ("AAPL", "", "", "tech, growth"),
+            )
+
+    async def test_multi_ticker_fields_reappear_in_single_mode(self):
+        """Alias and note fields should reappear when commas are removed."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            modal = AddTickerModal()
+            await pilot.app.push_screen(modal)
+            await pilot.pause()
+
+            ticker_input = modal.query_one("#ticker-input")
+            alias_input = modal.query_one("#alias-input")
+            note_input = modal.query_one("#note-input")
+
+            ticker_input.value = "AAPL,MSFT"
+            await pilot.pause()
+
+            self.assertFalse(alias_input.display)
+            self.assertFalse(note_input.display)
+
+            ticker_input.value = "AAPL"
+            await pilot.pause()
+
+            self.assertTrue(alias_input.display)
+            self.assertTrue(note_input.display)
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+    async def test_add_ticker_modal_rejects_empty_ticker(self):
+        """An empty ticker should leave the modal open."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = AddTickerModal()
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            await pilot.click("#add")
+            await pilot.pause()
+
+            self.assertIsNone(result)
+            self.assertIs(pilot.app.screen, modal)
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+
+    async def test_add_fred_series_modal_adds_series(self):
+        """A valid FRED series should be normalized and returned."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = AddFredSeriesModal()
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            modal.query_one("#series-input").value = "gdp"
+            modal.query_one("#alias-input").value = "US GDP"
+
+            await pilot.click("#add")
+            await pilot.pause()
+
+            self.assertEqual(result, ("GDP", "US GDP", "", ""))
+
+    async def test_add_fred_series_modal_defaults_alias(self):
+        """A blank alias should default to the normalized series ID."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = AddFredSeriesModal()
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            modal.query_one("#series-input").value = "unrate"
+
+            await pilot.click("#add")
+            await pilot.pause()
+
+            self.assertEqual(result, ("UNRATE", "UNRATE", "", ""))
+
+    async def test_add_fred_series_modal_cancel_and_invalid_input(self):
+        """Empty input should be rejected, while cancel should return None."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = "unchanged"
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = AddFredSeriesModal()
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            await pilot.click("#add")
+            await pilot.pause()
+
+            self.assertEqual(result, "unchanged")
+            self.assertIs(pilot.app.screen, modal)
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+            self.assertIsNone(result)
+
+    async def test_compare_info_modal_submit_and_cancel(self):
+        """Compare modal should support both submit and cancel."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = CompareInfoModal()
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            modal.query_one("#ticker-input").value = "aapl"
+            await pilot.click("#run")
+            await pilot.pause()
+
+            self.assertEqual(result, "AAPL")
+
+            result = "unchanged"
+            modal = CompareInfoModal()
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+            self.assertIsNone(result)
+
+    async def test_compare_info_modal_enter_submits(self):
+        """Submitting the input with Enter should use the same validation path."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = CompareInfoModal()
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            ticker_input = modal.query_one("#ticker-input")
+            ticker_input.value = "msft"
+            ticker_input.focus()
+
+            await pilot.press("enter")
+            await pilot.pause()
+
+            self.assertEqual(result, "MSFT")
+
+    async def test_confirm_add_to_all_portfolios_modal(self):
+        """Confirmation and cancellation should return True and False."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            results = []
+
+            await pilot.app.push_screen(
+                ConfirmAddToAllPortfoliosModal("AAPL", 3),
+                results.append,
+            )
+            await pilot.pause()
+
+            await pilot.click("#confirm")
+            await pilot.pause()
+
+            self.assertEqual(results[-1], True)
+
+            await pilot.app.push_screen(
+                ConfirmAddToAllPortfoliosModal("MSFT", 2),
+                results.append,
+            )
+            await pilot.pause()
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+            self.assertEqual(results[-1], False)
+
+    async def test_fred_series_modal_submit_and_cancel(self):
+        """Valid FRED input should submit uppercase, while cancel returns None."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = FredSeriesModal()
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            modal.query_one("#fred-series-input").value = "cpi"
+            await pilot.click("#submit")
+            await pilot.pause()
+
+            self.assertEqual(result, "CPI")
+
+            result = "unchanged"
+            modal = FredSeriesModal()
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+            self.assertIsNone(result)
+
+    async def test_fred_series_modal_enter_presses_submit(self):
+        """Enter in the FRED input should activate the submit button."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = FredSeriesModal()
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            fred_input = modal.query_one("#fred-series-input")
+            fred_input.value = "gdp"
+            fred_input.focus()
+
+            await pilot.press("enter")
+            await pilot.pause()
+
+            self.assertEqual(result, "GDP")
+
+
+    def test_ticker_input_change_handles_missing_fields(self):
+        """Missing alias/note widgets should not crash ticker-mode changes."""
+        modal = AddTickerModal()
+        modal._multi_ticker_mode = False
+
+        event = MagicMock()
+        event.value = "AAPL,MSFT"
+
+        with patch.object(
+            modal,
+            "query_one",
+            side_effect=RuntimeError("widgets unavailable"),
+        ):
+            modal._on_ticker_input_changed(event)
+
+        self.assertTrue(modal._multi_ticker_mode)
+
+    async def test_compare_info_modal_rejects_empty_input(self):
+        """Empty comparison input should leave the modal open."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = CompareInfoModal()
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            await pilot.click("#run")
+            await pilot.pause()
+
+            self.assertIsNone(result)
+            self.assertIs(pilot.app.screen, modal)
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+    async def test_compare_info_modal_ignores_unknown_button(self):
+        """Buttons other than run and cancel should not dismiss the modal."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            modal = CompareInfoModal()
+            await pilot.app.push_screen(modal)
+            await pilot.pause()
+
+            unknown_button = MagicMock()
+            unknown_button.id = "other"
+            modal.on_button_pressed(MagicMock(button=unknown_button))
+
+            self.assertIs(pilot.app.screen, modal)
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+    async def test_portfolio_modal_cancel_and_invalid_name(self):
+        """Empty names should be rejected, and cancel should return None."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = "unchanged"
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = CreatePortfolioModal()
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            await pilot.click("#create")
+            await pilot.pause()
+
+            self.assertEqual(result, "unchanged")
+            self.assertIs(pilot.app.screen, modal)
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+            self.assertIsNone(result)
+
+    async def test_fred_series_modal_rejects_invalid_input(self):
+        """Invalid FRED input should notify the user and remain open."""
+        app = ModalsTestApp()
+        app.notify = MagicMock()
+
+        async with app.run_test() as pilot:
+            modal = FredSeriesModal()
+            await pilot.app.push_screen(modal)
+            await pilot.pause()
+
+            await pilot.click("#submit")
+            await pilot.pause()
+
+            self.assertIs(pilot.app.screen, modal)
+            app.notify.assert_called()
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+    async def test_fred_series_modal_ignores_unknown_button(self):
+        """Unknown button events should not dismiss the FRED modal."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            modal = FredSeriesModal()
+            await pilot.app.push_screen(modal)
+            await pilot.pause()
+
+            unknown_button = MagicMock()
+            unknown_button.id = "other"
+            modal.on_button_pressed(MagicMock(button=unknown_button))
+
+            self.assertIs(pilot.app.screen, modal)
+
+            await pilot.click("#cancel")
+            await pilot.pause()
 
     async def test_confirm_delete_modal(self):
         """Test the ConfirmDeleteModal."""
