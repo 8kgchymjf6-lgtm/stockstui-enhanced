@@ -73,3 +73,54 @@ class TestLogHandler(unittest.TestCase):
         mock_app.call_from_thread.assert_not_called()
 
         logger.removeHandler(handler)
+
+
+    def test_runtime_error_from_call_from_thread_is_ignored(self):
+        """RuntimeError during shutdown should be handled without propagating."""
+        mock_app = MagicMock()
+        mock_app.notify = MagicMock()
+        mock_app.config = MagicMock()
+        mock_app.config.get_setting.return_value = False
+        mock_app.call_from_thread.side_effect = RuntimeError("app stopped")
+
+        handler = TextualHandler(app=mock_app)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+
+        record = logging.LogRecord(
+            name="test",
+            level=logging.WARNING,
+            pathname="",
+            lineno=0,
+            msg="Late worker message",
+            args=(),
+            exc_info=None,
+        )
+
+        handler.emit(record)
+
+        mock_app.call_from_thread.assert_called_once()
+
+    def test_unexpected_emit_error_calls_handle_error(self):
+        """Unexpected formatting errors should be delegated to handleError."""
+        mock_app = MagicMock()
+        mock_app.config = MagicMock()
+        mock_app.config.get_setting.return_value = False
+
+        handler = TextualHandler(app=mock_app)
+        handler.format = MagicMock(side_effect=ValueError("format failed"))
+        handler.handleError = MagicMock()
+
+        record = logging.LogRecord(
+            name="test",
+            level=logging.ERROR,
+            pathname="",
+            lineno=0,
+            msg="Broken message",
+            args=(),
+            exc_info=None,
+        )
+
+        handler.emit(record)
+
+        handler.handleError.assert_called_once_with(record)
+        mock_app.call_from_thread.assert_not_called()
