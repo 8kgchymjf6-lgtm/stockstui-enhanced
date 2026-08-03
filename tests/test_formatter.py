@@ -1,5 +1,7 @@
 import unittest
+from unittest.mock import patch
 import pandas as pd
+from datetime import datetime, timedelta, timezone
 from rich.text import Text
 from textual.app import App
 
@@ -278,6 +280,165 @@ class TestFormatter(unittest.IsolatedAsyncioTestCase):
         text = "Hello [World] *"
         escaped = formatter.escape(text)
         self.assertEqual(escaped, r"Hello \[World\] \*")
+
+
+    def test_format_market_cap_all_ranges(self):
+        """Market caps should use the appropriate magnitude suffix."""
+        self.assertEqual(formatter.format_market_cap("invalid"), "N/A")
+        self.assertEqual(formatter.format_market_cap(2_000_000_000_000), "2.00T")
+        self.assertEqual(formatter.format_market_cap(3_000_000_000), "3.00B")
+        self.assertEqual(formatter.format_market_cap(4_000_000), "4.00M")
+        self.assertEqual(formatter.format_market_cap(5_000), "5.00K")
+        self.assertEqual(formatter.format_market_cap(999), "999")
+        self.assertEqual(formatter.format_market_cap(-2_000_000), "-2.00M")
+
+    def test_get_currency_symbol_fallbacks(self):
+        """Currency symbols should be case-insensitive and safely default."""
+        self.assertEqual(formatter.get_currency_symbol("eur"), "€")
+        self.assertEqual(formatter.get_currency_symbol(None), "$")
+        self.assertEqual(formatter.get_currency_symbol("UNKNOWN"), "$")
+
+    def test_format_price_data_volume_ranges_and_missing_values(self):
+        """Volumes should be formatted across all supported magnitude ranges."""
+        data = [
+            {"symbol": "BILLION", "volume": 2_500_000_000},
+            {"symbol": "MILLION", "volume": 2_500_000},
+            {"symbol": "THOUSAND", "volume": 2_500},
+            {"symbol": "SMALL", "volume": 25},
+            {"symbol": "MISSING", "volume": None},
+        ]
+
+        rows = formatter.format_price_data_for_table(data, {}, {})
+        by_ticker = {row["Ticker"]: row for row in rows}
+
+        self.assertEqual(by_ticker["BILLION"]["Volume"], "2.5B")
+        self.assertEqual(by_ticker["MILLION"]["Volume"], "2.5M")
+        self.assertEqual(by_ticker["THOUSAND"]["Volume"], "2K")
+        self.assertEqual(by_ticker["SMALL"]["Volume"], "25")
+        self.assertEqual(by_ticker["MISSING"]["Volume"], "N/A")
+
+    def test_format_price_data_trailing_currency_and_fallbacks(self):
+        """Trailing currencies and absent numerical values should format safely."""
+        data = [
+            {
+                "symbol": "NOVO-B.CO",
+                "currency": "DKK",
+                "day_low": 500.0,
+                "day_high": 510.0,
+                "fifty_two_week_low": 400.0,
+                "fifty_two_week_high": 700.0,
+                "open": 505.0,
+                "previous_close": 504.0,
+            },
+            {
+                "symbol": "EMPTY",
+                "currency": "USD",
+            },
+        ]
+
+        rows = formatter.format_price_data_for_table(data, {}, {})
+        novo, empty = rows
+
+        self.assertEqual(novo["Day's Range"], "500.0–510.0 DKK")
+        self.assertEqual(novo["52-Wk Range"], "400.0–700.0 DKK")
+        self.assertEqual(novo["Open"], "505.0 DKK")
+        self.assertEqual(novo["Prev Close"], "504.0 DKK")
+
+        self.assertEqual(empty["Day's Range"], "N/A")
+        self.assertEqual(empty["52-Wk Range"], "N/A")
+        self.assertEqual(empty["Open"], "N/A")
+        self.assertEqual(empty["Prev Close"], "N/A")
+
+    def test_format_info_comparison_handles_all_get_errors(self):
+        """Every comparison source should tolerate failing get operations."""
+        class RaisingMapping:
+            def keys(self):
+                return {"price"}
+
+            def get(self, key, default=None):
+                raise RuntimeError("lookup failed")
+
+        rows = formatter.format_info_comparison(
+            RaisingMapping(),
+            RaisingMapping(),
+            RaisingMapping(),
+            RaisingMapping(),
+        )
+
+        self.assertEqual(
+            rows,
+            [("price", "N/A", "N/A", "N/A", "N/A", False)],
+        )
+
+    def test_format_news_with_missing_fields(self):
+        """Missing news fields should be displayed as dimmed N/A values."""
+        markdown, urls = formatter.format_news_for_display([{}])
+
+        self.assertIn("[dim]N/A[/dim]", markdown)
+        self.assertIn("By [dim]N/A[/dim] at [dim]N/A[/dim]", markdown)
+        self.assertIn("**Summary:**\n[dim]N/A[/dim]", markdown)
+        self.assertEqual(urls, [])
+
+    def test_format_market_status_pre_post_and_weekend(self):
+        """Pre-market, post-market, and weekend states should be labelled."""
+        pre = formatter.format_market_status(
+            {"calendar": "NYSE", "status": "pre"}
+        )
+        post = formatter.format_market_status(
+            {"calendar": "NYSE", "status": "post"}
+        )
+        weekend = formatter.format_market_status(
+            {
+                "calendar": "NYSE",
+                "status": "closed",
+                "reason": "weekend",
+            }
+        )
+
+        self.assertEqual(pre[1][0], ("PRE ", "status-pre"))
+        self.assertEqual(post[1][0], ("AFTER ", "status-post"))
+        self.assertIn("(Weekend)", weekend[1][1][0])
+
+    def test_format_market_status_next_close_and_open(self):
+        """Market status should include the relevant next trading event."""
+        now = datetime.now(timezone.utc)
+
+        open_status = formatter.format_market_status(
+            {
+                "calendar": "NYSE",
+                "status": "open",
+                "is_open": True,
+                "next_close": now + timedelta(hours=2),
+            }
+        )
+        self.assertTrue(
+            any("Closes" in part[0] for part in open_status[1])
+        )
+
+        closed_today = formatter.format_market_status(
+            {
+                "calendar": "NYSE",
+                "status": "closed",
+                "is_open": False,
+                "next_open": now + timedelta(hours=1),
+            }
+        )
+        self.assertTrue(
+            any("Opens" in part[0] for part in closed_today[1])
+        )
+
+        closed_future = formatter.format_market_status(
+            {
+                "calendar": "NYSE",
+                "status": "closed",
+                "is_open": False,
+                "next_open": now + timedelta(days=2),
+            }
+        )
+        next_event = next(
+            part[0] for part in closed_future[1] if "Opens" in part[0]
+        )
+        self.assertRegex(next_event, r"\(Opens [A-Z][a-z]{2} \d{2}:\d{2}\)")
 
 
 if __name__ == "__main__":
