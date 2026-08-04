@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 from textual.app import App
 from textual.widgets import DataTable, Input, Markdown
 from textual.theme import Theme
+from textual.dom import NoMatches
 from rich.text import Text
 from textual import on
 
@@ -205,13 +206,19 @@ class TestNewsView(unittest.IsolatedAsyncioTestCase):
         async with app.run_test() as pilot:
             await pilot.pause()
 
+            markdown = view.query_one(Markdown)
+
             view._original_markdown = Text("Plain content")
             view._current_link_index = 0
-            view._highlight_current_link()
+            with patch.object(markdown, "update") as update:
+                view._highlight_current_link()
+                update.assert_called_once_with(view._original_markdown)
 
             view._original_markdown = "[Title](link)"
             view._current_link_index = -1
-            view._highlight_current_link()
+            with patch.object(markdown, "update") as update:
+                view._highlight_current_link()
+                update.assert_called_once_with("[Title](link)")
 
             view._link_urls = []
             view.action_cycle_links()
@@ -360,6 +367,122 @@ class TestConfigContainer(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(container.query_one("ContentSwitcher").current, "main")
 
+
+    def test_config_container_switch_view_edge_cases(self):
+        """Repeated navigation and missing focus targets should be harmless."""
+        container = ConfigContainer()
+        switcher = MagicMock()
+        switcher.current = "main"
+
+        focus_target = MagicMock()
+        query_result = MagicMock()
+        query_result.first.return_value = focus_target
+
+        container._history = ["main"]
+
+        with (
+            patch.object(container, "query_one", return_value=switcher),
+            patch.object(container, "query", return_value=query_result),
+        ):
+            container._switch_view("general")
+
+        self.assertEqual(switcher.current, "general")
+        self.assertEqual(container._history, ["main", "general"])
+        focus_target.focus.assert_called_once()
+
+        # The requested view is already the latest history entry.
+        switcher.current = "main"
+        container._history = ["general"]
+
+        with (
+            patch.object(container, "query_one", return_value=switcher),
+            patch.object(container, "query", return_value=query_result),
+        ):
+            container._switch_view("general")
+
+        self.assertEqual(container._history, ["general"])
+
+        # The switcher is already displaying the requested view.
+        switcher.current = "general"
+
+        with (
+            patch.object(container, "query_one", return_value=switcher),
+            patch.object(container, "query", side_effect=NoMatches),
+        ):
+            container._switch_view("general")
+
+        self.assertEqual(container._history, ["general"])
+
+    def test_config_container_go_back_edge_cases(self):
+        """Back navigation should handle missing views and empty history."""
+        container = ConfigContainer()
+        switcher = MagicMock()
+        container._history = ["main", "lists"]
+
+        with (
+            patch.object(container, "query_one", return_value=switcher),
+            patch.object(container, "query", side_effect=NoMatches),
+        ):
+            result = container.action_go_back()
+
+        self.assertTrue(result)
+        self.assertEqual(switcher.current, "main")
+        self.assertEqual(container._history, ["main"])
+
+        self.assertFalse(container.action_go_back())
+
+    def test_config_container_show_main(self):
+        """Showing the main view should reset navigation history."""
+        container = ConfigContainer()
+        switcher = MagicMock()
+        switcher.current = "lists"
+
+        focus_target = MagicMock()
+        query_result = MagicMock()
+        query_result.first.return_value = focus_target
+
+        container._history = ["main", "lists"]
+
+        with (
+            patch.object(container, "query_one", return_value=switcher),
+            patch.object(container, "query", return_value=query_result),
+        ):
+            container.show_main()
+
+        self.assertEqual(switcher.current, "main")
+        self.assertEqual(container._history, ["main"])
+        focus_target.focus.assert_called_once()
+
+        # Also cover an already-active main view with no focus target.
+        switcher.current = "main"
+
+        with (
+            patch.object(container, "query_one", return_value=switcher),
+            patch.object(container, "query", side_effect=NoMatches),
+        ):
+            container.show_main()
+
+        self.assertEqual(container._history, ["main"])
+
+    def test_config_container_public_view_methods(self):
+        """Public navigation methods should delegate to the correct view IDs."""
+        container = ConfigContainer()
+
+        with patch.object(container, "_switch_view") as switch_view:
+            container.show_general()
+            container.show_lists()
+            container.show_portfolios()
+            container.show_fred()
+
+        self.assertEqual(
+            switch_view.call_args_list,
+            [
+                unittest.mock.call("general"),
+                unittest.mock.call("lists"),
+                unittest.mock.call("portfolios"),
+                unittest.mock.call("fred"),
+            ],
+        )
 
 class TestListsConfigView(unittest.IsolatedAsyncioTestCase):
     """Unit tests for the ListsConfigView."""
