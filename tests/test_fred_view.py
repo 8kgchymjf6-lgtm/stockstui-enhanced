@@ -1,6 +1,8 @@
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 from textual.app import App
+from textual.dom import NoMatches
+import webbrowser
 from stockstui.ui.views.fred_view import FredView, FredDataTable
 
 
@@ -182,3 +184,473 @@ class TestFredView(unittest.IsolatedAsyncioTestCase):
             self.assertIn("success", app.theme_variables)
             self.assertIn("error", app.theme_variables)
             self.assertIn("warning", app.theme_variables)
+
+
+    def test_fred_data_table_bubbles_actions(self):
+        """Table actions should be forwarded to the nearest supporting ancestor."""
+        table = FredDataTable()
+        parent = MagicMock()
+        parent.action_edit_series = MagicMock()
+        parent.action_open_series = MagicMock()
+
+        with patch.object(
+            type(table),
+            "ancestors",
+            new_callable=PropertyMock,
+            return_value=[object(), parent],
+        ):
+            table.action_edit_series()
+            table.action_open_series()
+
+        parent.action_edit_series.assert_called_once_with()
+        parent.action_open_series.assert_called_once_with()
+
+    def test_fred_data_table_actions_without_parent(self):
+        """Table actions should be harmless without a supporting ancestor."""
+        table = FredDataTable()
+
+        with patch.object(
+            type(table),
+            "ancestors",
+            new_callable=PropertyMock,
+            return_value=[object()],
+        ):
+            table.action_edit_series()
+            table.action_open_series()
+
+    def test_fred_view_focus_table_handles_missing_table(self):
+        """Focusing should work normally and ignore a missing table."""
+        view = FredView()
+        table = MagicMock()
+
+        with patch.object(view, "query_one", return_value=table):
+            view.action_focus_table()
+
+        table.focus.assert_called_once_with()
+
+        with patch.object(view, "query_one", side_effect=NoMatches):
+            view.action_focus_table()
+
+    def test_fred_view_edit_series_guard_clauses(self):
+        """Editing should stop when no table cell is selected."""
+        view = FredView()
+        table = MagicMock()
+        table.cursor_type = "none"
+
+        with (
+            patch.object(view, "query_one", return_value=table),
+            patch.object(type(view), "app", new_callable=PropertyMock) as app_property,
+        ):
+            app = MagicMock()
+            app_property.return_value = app
+            view.action_edit_series()
+
+        app.push_screen.assert_not_called()
+
+        table.cursor_type = "cell"
+        cell_key = MagicMock()
+        cell_key.row_key = None
+        table.coordinate_to_cell_key.return_value = cell_key
+
+        with (
+            patch.object(view, "query_one", return_value=table),
+            patch.object(type(view), "app", new_callable=PropertyMock) as app_property,
+        ):
+            app = MagicMock()
+            app_property.return_value = app
+            view.action_edit_series()
+
+        app.push_screen.assert_not_called()
+
+    def test_fred_view_edit_callback_updates_and_removes_alias(self):
+        """The edit callback should support cancel, update, and alias removal."""
+        view = FredView()
+        table = MagicMock()
+        table.cursor_type = "cell"
+
+        row_key = MagicMock()
+        row_key.value = "TEST1"
+        cell_key = MagicMock()
+        cell_key.row_key = row_key
+        table.coordinate_to_cell_key.return_value = cell_key
+
+        app = MagicMock()
+        app.config.settings = {
+            "fred_settings": {
+                "series_list": ["TEST1"],
+                "series_aliases": {"TEST1": "Old Alias"},
+            }
+        }
+
+        with (
+            patch.object(view, "query_one", return_value=table),
+            patch.object(type(view), "app", new_callable=PropertyMock, return_value=app),
+            patch.object(view, "load_all_series") as load_all_series,
+        ):
+            view.action_edit_series()
+
+            callback = app.push_screen.call_args.args[1]
+
+            callback(None)
+            app.config.save_settings.assert_not_called()
+
+            callback("New Alias")
+            self.assertEqual(
+                app.config.settings["fred_settings"]["series_aliases"]["TEST1"],
+                "New Alias",
+            )
+
+            callback("")
+            self.assertNotIn(
+                "TEST1",
+                app.config.settings["fred_settings"]["series_aliases"],
+            )
+
+        self.assertEqual(app.config.save_settings.call_count, 2)
+        self.assertEqual(load_all_series.call_count, 2)
+        self.assertEqual(app.notify.call_count, 2)
+
+    def test_fred_view_edit_callback_creates_alias_mapping(self):
+        """The callback should create series_aliases when it is absent."""
+        view = FredView()
+        table = MagicMock()
+        table.cursor_type = "cell"
+
+        row_key = MagicMock()
+        row_key.value = "TEST2"
+        cell_key = MagicMock()
+        cell_key.row_key = row_key
+        table.coordinate_to_cell_key.return_value = cell_key
+
+        app = MagicMock()
+        app.config.settings = {
+            "fred_settings": {
+                "series_list": ["TEST2"],
+            }
+        }
+
+        with (
+            patch.object(view, "query_one", return_value=table),
+            patch.object(type(view), "app", new_callable=PropertyMock, return_value=app),
+            patch.object(view, "load_all_series"),
+        ):
+            view.action_edit_series()
+            callback = app.push_screen.call_args.args[1]
+            callback("Alias 2")
+
+        self.assertEqual(
+            app.config.settings["fred_settings"]["series_aliases"],
+            {"TEST2": "Alias 2"},
+        )
+
+    def test_fred_view_open_series_guard_and_error_paths(self):
+        """Opening should handle invalid selections and browser failures."""
+        view = FredView()
+        table = MagicMock()
+        app = MagicMock()
+
+        table.cursor_type = "none"
+
+        with (
+            patch.object(view, "query_one", return_value=table),
+            patch.object(type(view), "app", new_callable=PropertyMock, return_value=app),
+        ):
+            view.action_open_series()
+
+        app.notify.assert_not_called()
+
+        table.cursor_type = "cell"
+        table.cursor_row = 0
+        cell_key = MagicMock()
+        cell_key.row_key = None
+        table.coordinate_to_cell_key.return_value = cell_key
+
+        with (
+            patch.object(view, "query_one", return_value=table),
+            patch.object(type(view), "app", new_callable=PropertyMock, return_value=app),
+        ):
+            view.action_open_series()
+
+        app.notify.assert_not_called()
+
+        row_key = MagicMock()
+        row_key.value = "TEST1"
+        cell_key.row_key = row_key
+
+        with (
+            patch.object(view, "query_one", return_value=table),
+            patch.object(type(view), "app", new_callable=PropertyMock, return_value=app),
+            patch(
+                "stockstui.ui.views.fred_view.webbrowser.open",
+                side_effect=webbrowser.Error("no browser"),
+            ),
+        ):
+            view.action_open_series()
+
+        self.assertEqual(app.notify.call_args.kwargs["severity"], "error")
+        self.assertEqual(app.notify.call_args.kwargs["timeout"], 8)
+
+        app.notify.reset_mock()
+
+        with (
+            patch.object(view, "query_one", return_value=table),
+            patch.object(type(view), "app", new_callable=PropertyMock, return_value=app),
+            patch(
+                "stockstui.ui.views.fred_view.webbrowser.open",
+                side_effect=RuntimeError("browser failure"),
+            ),
+        ):
+            view.action_open_series()
+
+        app.notify.assert_called_with(
+            "Failed to open browser: browser failure",
+            severity="error",
+        )
+
+        with patch.object(view, "query_one", side_effect=NoMatches):
+            view.action_open_series()
+
+    def test_fred_view_helpers_handle_missing_table(self):
+        """Display helpers should ignore an unmounted table."""
+        view = FredView()
+
+        with patch.object(view, "query_one", side_effect=NoMatches):
+            view._set_loading(True)
+            view._show_error()
+            view._display_empty()
+            view._populate_table([])
+
+
+    def test_edit_series_empty_alias_when_alias_is_absent(self):
+        """An empty alias should be harmless when no alias exists."""
+        view = FredView()
+        table = MagicMock()
+        table.cursor_type = "cell"
+
+        row_key = MagicMock()
+        row_key.value = "TEST3"
+        cell_key = MagicMock()
+        cell_key.row_key = row_key
+        table.coordinate_to_cell_key.return_value = cell_key
+
+        app = MagicMock()
+        app.config.settings = {
+            "fred_settings": {
+                "series_list": ["TEST3"],
+                "series_aliases": {},
+            }
+        }
+
+        with (
+            patch.object(view, "query_one", return_value=table),
+            patch.object(
+                type(view),
+                "app",
+                new_callable=PropertyMock,
+                return_value=app,
+            ),
+            patch.object(view, "load_all_series") as load_all_series,
+        ):
+            view.action_edit_series()
+            callback = app.push_screen.call_args.args[1]
+            callback("")
+
+        self.assertEqual(
+            app.config.settings["fred_settings"]["series_aliases"],
+            {},
+        )
+        app.config.save_settings.assert_called_once_with()
+        load_all_series.assert_called_once_with()
+
+    def test_edit_series_handles_missing_table(self):
+        """Editing should safely ignore an unmounted table."""
+        view = FredView()
+
+        with patch.object(view, "query_one", side_effect=NoMatches):
+            view.action_edit_series()
+
+    def test_load_all_series_handles_missing_configuration(self):
+        """Missing API keys and empty series lists should show helpful states."""
+        view = FredView()
+        app = MagicMock()
+
+        load_function = FredView.load_all_series.__wrapped__
+
+        app.config.settings = {"fred_settings": {}}
+
+        with patch.object(
+            type(view),
+            "app",
+            new_callable=PropertyMock,
+            return_value=app,
+        ):
+            load_function(view)
+
+        app.call_from_thread.assert_called_once_with(view._show_error)
+
+        app.call_from_thread.reset_mock()
+        app.config.settings = {
+            "fred_settings": {
+                "api_key": "fake-key",
+                "series_list": [],
+            }
+        }
+
+        with patch.object(
+            type(view),
+            "app",
+            new_callable=PropertyMock,
+            return_value=app,
+        ):
+            load_function(view)
+
+        app.call_from_thread.assert_called_once_with(view._display_empty)
+
+    def test_load_all_series_filters_failed_requests(self):
+        """A failed series request should not discard successful summaries."""
+        view = FredView()
+        app = MagicMock()
+        app.config.settings = {
+            "fred_settings": {
+                "api_key": "fake-key",
+                "series_list": ["GOOD", "BAD"],
+            }
+        }
+
+        good_summary = {
+            "id": "GOOD",
+            "title": "Successful series",
+        }
+
+        def get_summary(series_id, api_key):
+            if series_id == "BAD":
+                raise RuntimeError("FRED request failed")
+            return good_summary
+
+        load_function = FredView.load_all_series.__wrapped__
+
+        with (
+            patch.object(
+                type(view),
+                "app",
+                new_callable=PropertyMock,
+                return_value=app,
+            ),
+            patch(
+                "stockstui.ui.views.fred_view.fred_provider.get_series_summary",
+                side_effect=get_summary,
+            ),
+        ):
+            load_function(view)
+
+        self.assertEqual(app.call_from_thread.call_count, 2)
+        app.call_from_thread.assert_any_call(view._set_loading, True)
+        app.call_from_thread.assert_any_call(
+            view._populate_table,
+            [good_summary],
+        )
+
+    def test_error_and_empty_messages_update_table(self):
+        """Error and empty states should clear and update the table."""
+        view = FredView()
+        table = MagicMock()
+
+        with patch.object(view, "query_one", return_value=table):
+            view._show_error()
+
+        self.assertFalse(table.loading)
+        table.clear.assert_called_once_with()
+        table.add_row.assert_called_once_with(
+            "Error: API Key missing. Go to Configs > FRED Settings."
+        )
+
+        table.reset_mock()
+
+        with patch.object(view, "query_one", return_value=table):
+            view._display_empty()
+
+        self.assertFalse(table.loading)
+        table.clear.assert_called_once_with()
+        table.add_row.assert_called_once_with(
+            "No series configured. Go to Configs > FRED Settings to add data."
+        )
+
+    def test_populate_table_covers_remaining_formatting_branches(self):
+        """Population should format extremes, neutral values, and missing aliases."""
+        view = FredView()
+        table = MagicMock()
+        table.row_count = 1
+        table.cursor_row = None
+
+        app = MagicMock()
+        app.theme_variables = {
+            "success": "green",
+            "error": "red",
+            "warning": "yellow",
+            "text-muted": "dim",
+        }
+        app.config.settings = {
+            "fred_settings": {
+                "series_aliases": {},
+            }
+        }
+
+        summaries = [
+            {
+                "id": "HIGH",
+                "title": "High range",
+                "current": "N/A",
+                "yoy_pct": -2.0,
+                "roll_12": None,
+                "roll_24": None,
+                "z_10y": 2.5,
+                "hist_min_10y": None,
+                "hist_max_10y": None,
+                "pct_of_range": 95,
+                "date": "2026-01-01",
+                "frequency": "Q",
+                "units": "Percent",
+            },
+            {
+                "id": "LOW",
+                "title": "Low range",
+                "current": None,
+                "yoy_pct": 0,
+                "z_10y": 0.5,
+                "pct_of_range": 5,
+            },
+        ]
+
+        with (
+            patch.object(view, "query_one", return_value=table),
+            patch.object(
+                type(view),
+                "app",
+                new_callable=PropertyMock,
+                return_value=app,
+            ),
+        ):
+            view._populate_table(summaries)
+
+        self.assertEqual(table.add_row.call_count, 2)
+
+        first_row = table.add_row.call_args_list[0]
+        first_values = first_row.args
+
+        self.assertEqual(str(first_values[0]), "High range")
+        self.assertEqual(str(first_values[1]), "N/A")
+        self.assertEqual(str(first_values[2]), "-2.0%")
+        self.assertEqual(str(first_values[5]), "+2.50")
+        self.assertEqual(str(first_values[8]), "95%")
+        self.assertEqual(str(first_values[11]), "Percent")
+        self.assertEqual(first_row.kwargs["key"], "HIGH")
+
+        second_row = table.add_row.call_args_list[1]
+        second_values = second_row.args
+
+        self.assertEqual(str(second_values[0]), "Low range")
+        self.assertEqual(str(second_values[2]), "0.0%")
+        self.assertEqual(str(second_values[5]), "+0.50")
+        self.assertEqual(str(second_values[8]), "5%")
+
+        self.assertEqual(table.cursor_coordinate, (0, 0))
