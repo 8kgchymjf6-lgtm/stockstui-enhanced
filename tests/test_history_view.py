@@ -2,8 +2,10 @@ import unittest
 import pandas as pd
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
-from textual.widgets import DataTable
+from textual.widgets import DataTable, RadioButton
+from textual.dom import NoMatches
 from stockstui.ui.views.history_view import HistoryView
 from stockstui.ui.widgets.history_chart import HistoryChart
 from stockstui.main import StocksTUI
@@ -85,3 +87,241 @@ class TestHistoryView(unittest.IsolatedAsyncioTestCase):
 
             message = history_view.query_one("#history-display-container > Static")
             self.assertIn("Invalid ticker", str(message.render()))
+
+
+    async def test_mount_applies_history_cli_overrides(self):
+        """CLI chart and period options should be applied on mount."""
+        app = self._setup_app_with_data(pd.DataFrame())
+        app.cli_overrides = {"chart": True, "period": "1d"}
+        app.history_ticker = "AAPL"
+        app.fetch_historical_data = unittest.mock.MagicMock()
+
+        async with app.run_test() as pilot:
+            history_view = HistoryView()
+            await pilot.app.mount(history_view)
+            await pilot.pause()
+
+            toggle = history_view.query_one("#history-view-toggle")
+            self.assertTrue(toggle.value)
+
+            radio_set = history_view.query_one("#history-range-select")
+            self.assertIsNotNone(radio_set.pressed_button)
+            self.assertEqual(
+                str(radio_set.pressed_button.label),
+                "1D",
+            )
+
+            app.fetch_historical_data.assert_called_with("AAPL", "1d", "5m")
+            self.assertEqual(app._history_period, "1d")
+
+    async def test_mount_without_ticker_renders_information_message(self):
+        """An empty initial state should explain that a ticker is required."""
+        app = self._setup_app_with_data(None)
+        app.cli_overrides = {}
+        app.history_ticker = ""
+
+        async with app.run_test() as pilot:
+            history_view = HistoryView()
+            await pilot.app.mount(history_view)
+            await pilot.pause()
+
+            message = history_view.query_one(
+                "#history-display-container > #info-message"
+            )
+            self.assertIn("Enter a ticker symbol", str(message.render()))
+
+    async def test_renders_remaining_empty_data_messages(self):
+        """Network, processing, and generic empty-data messages should render."""
+        cases = [
+            ("Network Error", "MSFT", "Could not retrieve data"),
+            ("Data Error", "TSLA", "Could not process data"),
+            (None, "NVDA", "No historical data found"),
+        ]
+
+        for error_type, symbol, expected in cases:
+            with self.subTest(error_type=error_type):
+                empty_df = pd.DataFrame()
+                empty_df.attrs = {"symbol": symbol}
+                if error_type is not None:
+                    empty_df.attrs["error"] = error_type
+
+                app = self._setup_app_with_data(empty_df)
+                app.history_ticker = ""
+
+                async with app.run_test() as pilot:
+                    history_view = HistoryView()
+                    await pilot.app.mount(history_view)
+                    await history_view._render_historical_data()
+                    await pilot.pause()
+
+                    message = history_view.query_one(
+                        "#history-display-container > Static"
+                    )
+                    self.assertIn(expected, str(message.render()))
+
+    async def test_requests_daily_history_and_handles_missing_ticker(self):
+        """Normal periods should use daily data; an empty ticker should do nothing."""
+        app = self._setup_app_with_data(pd.DataFrame())
+        app.cli_overrides = {}
+        app.history_ticker = ""
+        app.fetch_historical_data = unittest.mock.MagicMock()
+
+        async with app.run_test() as pilot:
+            history_view = HistoryView()
+            await pilot.app.mount(history_view)
+            await pilot.pause()
+
+            history_view._request_historical_data()
+            app.fetch_historical_data.assert_not_called()
+
+            app.history_ticker = "MSFT"
+            history_view._request_historical_data()
+
+            app.fetch_historical_data.assert_called_once_with(
+                "MSFT", "1mo", "1d"
+            )
+            self.assertEqual(app._history_period, "1mo")
+            self.assertTrue(
+                history_view.query_one(
+                    "#history-display-container"
+                ).loading
+            )
+
+    async def test_history_input_events_and_sorting(self):
+        """Ticker parsing, submission, range changes, toggling, and sorting."""
+        app = self._setup_app_with_data(None)
+        app.cli_overrides = {}
+        app.history_ticker = ""
+        app._set_and_apply_history_sort = unittest.mock.MagicMock()
+
+        async with app.run_test() as pilot:
+            history_view = HistoryView()
+            await pilot.app.mount(history_view)
+            await pilot.pause()
+
+            self.assertEqual(
+                history_view._parse_ticker_from_input(
+                    " msft - Microsoft Corporation "
+                ),
+                "MSFT",
+            )
+            self.assertEqual(
+                history_view._parse_ticker_from_input(" nvda "),
+                "NVDA",
+            )
+
+            history_view._request_historical_data = unittest.mock.MagicMock()
+
+            history_view.on_history_ticker_submitted(
+                SimpleNamespace(value="")
+            )
+            history_view._request_historical_data.assert_not_called()
+
+            history_view.on_history_ticker_submitted(
+                SimpleNamespace(value=" aapl - Apple ")
+            )
+            self.assertEqual(app.history_ticker, "AAPL")
+            history_view._request_historical_data.assert_called_once()
+
+            history_view._request_historical_data.reset_mock()
+            history_view.on_history_range_changed(SimpleNamespace())
+            history_view._request_historical_data.assert_called_once()
+
+            history_view._render_historical_data = unittest.mock.AsyncMock()
+            await history_view.on_history_view_toggled(SimpleNamespace())
+            history_view._render_historical_data.assert_awaited_once()
+
+            history_view.on_history_table_header_selected(
+                SimpleNamespace(
+                    column_key=SimpleNamespace(value="Close")
+                )
+            )
+            app._set_and_apply_history_sort.assert_called_once_with(
+                "Close", "click"
+            )
+
+    async def test_history_view_ignores_missing_widgets(self):
+        """Widget removal during asynchronous work should be harmless."""
+        app = self._setup_app_with_data(None)
+        app.cli_overrides = {}
+        app.history_ticker = "AAPL"
+
+        async with app.run_test() as pilot:
+            history_view = HistoryView()
+            await pilot.app.mount(history_view)
+            await pilot.pause()
+
+            with unittest.mock.patch.object(
+                history_view,
+                "query_one",
+                side_effect=NoMatches,
+            ):
+                await history_view._render_historical_data()
+                history_view._request_historical_data()
+
+
+    async def test_mount_handles_incomplete_cli_overrides(self):
+        """False, missing, and unknown CLI overrides should be harmless."""
+        cases = [
+            {"chart": False},
+            {"period": "unknown"},
+        ]
+
+        for overrides in cases:
+            with self.subTest(overrides=overrides):
+                app = self._setup_app_with_data(None)
+                app.cli_overrides = overrides
+                app.history_ticker = ""
+
+                async with app.run_test() as pilot:
+                    history_view = HistoryView()
+                    await pilot.app.mount(history_view)
+                    await pilot.pause()
+
+                    toggle = history_view.query_one("#history-view-toggle")
+                    self.assertFalse(toggle.value)
+
+    async def test_request_history_without_pressed_button(self):
+        """No selected range should result in no data request."""
+        app = self._setup_app_with_data(pd.DataFrame())
+        app.history_ticker = "AAPL"
+        app.fetch_historical_data = unittest.mock.MagicMock()
+
+        async with app.run_test() as pilot:
+            history_view = HistoryView()
+            await pilot.app.mount(history_view)
+            await pilot.pause()
+            app.fetch_historical_data.reset_mock()
+
+            with unittest.mock.patch.object(
+                history_view,
+                "query_one",
+                return_value=SimpleNamespace(pressed_button=None),
+            ):
+                history_view._request_historical_data()
+
+            app.fetch_historical_data.assert_not_called()
+
+    async def test_request_history_with_unknown_period_label(self):
+        """An unknown selected range should result in no data request."""
+        app = self._setup_app_with_data(pd.DataFrame())
+        app.history_ticker = "AAPL"
+        app.fetch_historical_data = unittest.mock.MagicMock()
+
+        async with app.run_test() as pilot:
+            history_view = HistoryView()
+            await pilot.app.mount(history_view)
+            await pilot.pause()
+            app.fetch_historical_data.reset_mock()
+
+            unknown_button = SimpleNamespace(label="Unknown")
+            radio_set = SimpleNamespace(pressed_button=unknown_button)
+
+            with unittest.mock.patch.object(
+                history_view,
+                "query_one",
+                return_value=radio_set,
+            ):
+                history_view._request_historical_data()
+
+            app.fetch_historical_data.assert_not_called()
