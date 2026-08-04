@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, PropertyMock, patch
 from textual.app import App
 from textual.widgets import Button, Static
 
@@ -354,3 +354,159 @@ class TestDebugViewExtended(unittest.IsolatedAsyncioTestCase):
 
                 # Check that the appropriate method was called for non-modal buttons
                 methods[i].assert_called()
+
+
+    async def test_compare_modal_success_callback(self):
+        """A submitted ticker should create the table and start comparison."""
+        app = DebugViewTestApp()
+
+        async with app.run_test() as pilot:
+            view = app.query_one(DebugView)
+            button = view.query_one("#debug-compare-info", Button)
+
+            await view.on_debug_button_pressed(Button.Pressed(button))
+
+            callback = app.push_screen.call_args.args[1]
+            await callback("AAPL")
+            await pilot.pause()
+
+            table = view.query_one("#debug-table")
+            self.assertTrue(table.loading)
+            self.assertEqual(len(table.columns), 5)
+            app.run_info_comparison_test.assert_called_once_with("AAPL")
+
+    async def test_compare_modal_cancel_callback(self):
+        """Cancelling comparison should restore the message and buttons."""
+        app = DebugViewTestApp()
+
+        async with app.run_test() as pilot:
+            view = app.query_one(DebugView)
+            button = view.query_one("#debug-compare-info", Button)
+
+            await view.on_debug_button_pressed(Button.Pressed(button))
+
+            callback = app.push_screen.call_args.args[1]
+            await callback(None)
+            await pilot.pause()
+
+            message = view.query_one("#info-message", Static)
+            self.assertIn(
+                "Run a test to see results",
+                str(message.render()),
+            )
+            self.assertTrue(
+                all(
+                    not item.disabled
+                    for item in view.query(".debug-buttons Button")
+                )
+            )
+
+    async def test_fred_modal_success_callback(self):
+        """A submitted FRED ID should start the API debug test."""
+        app = DebugViewTestApp()
+
+        async with app.run_test() as pilot:
+            view = app.query_one(DebugView)
+            button = view.query_one("#debug-test-fred", Button)
+
+            await view.on_debug_button_pressed(Button.Pressed(button))
+
+            callback = app.push_screen.call_args.args[1]
+            await callback("  gdp  ")
+            await pilot.pause()
+
+            table = view.query_one("#debug-table")
+            self.assertTrue(table.loading)
+            self.assertEqual(len(table.columns), 2)
+            app.run_fred_debug_test.assert_called_once_with(
+                ["GDP"],
+                "test_key",
+            )
+
+    async def test_fred_modal_cancel_callback(self):
+        """Cancelling the FRED modal should restore the initial state."""
+        app = DebugViewTestApp()
+
+        async with app.run_test() as pilot:
+            view = app.query_one(DebugView)
+            button = view.query_one("#debug-test-fred", Button)
+
+            await view.on_debug_button_pressed(Button.Pressed(button))
+
+            callback = app.push_screen.call_args.args[1]
+            await callback(None)
+            await pilot.pause()
+
+            self.assertIsNotNone(
+                view.query_one("#info-message", Static)
+            )
+            self.assertTrue(
+                all(
+                    not item.disabled
+                    for item in view.query(".debug-buttons Button")
+                )
+            )
+
+    async def test_on_key_returns_when_no_buttons_exist(self):
+        """Keyboard handling should stop safely with no buttons."""
+        app = DebugViewTestApp()
+
+        async with app.run_test():
+            view = app.query_one(DebugView)
+            event = MagicMock()
+            event.key = "i"
+
+            with patch.object(view, "query", return_value=[]):
+                view.on_key(event)
+
+            event.stop.assert_not_called()
+
+    async def test_on_key_i_directly_focuses_first_button(self):
+        """The direct handler should focus the first button for i."""
+        app = DebugViewTestApp()
+
+        async with app.run_test():
+            view = app.query_one(DebugView)
+            first_button = list(
+                view.query(".debug-buttons Button")
+            )[0]
+
+            event = MagicMock()
+            event.key = "i"
+
+            with (
+                patch.object(
+                    type(app),
+                    "focused",
+                    new_callable=PropertyMock,
+                    return_value=None,
+                ),
+                patch.object(first_button, "focus") as focus_mock,
+            ):
+                view.on_key(event)
+
+            focus_mock.assert_called_once()
+            event.stop.assert_called_once()
+
+    async def test_on_key_ignores_unrelated_key_with_button_focus(self):
+        """Enter should remain available for the focused Button itself."""
+        app = DebugViewTestApp()
+
+        async with app.run_test():
+            view = app.query_one(DebugView)
+            first_button = list(
+                view.query(".debug-buttons Button")
+            )[0]
+
+            event = MagicMock()
+            event.key = "enter"
+
+            with patch.object(
+                type(app),
+                "focused",
+                new_callable=PropertyMock,
+                return_value=first_button,
+            ):
+                view.on_key(event)
+
+            event.stop.assert_not_called()
