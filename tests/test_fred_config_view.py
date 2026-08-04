@@ -455,6 +455,43 @@ class TestFredConfigView(unittest.IsolatedAsyncioTestCase):
             focus_mock.assert_called_once()
             event.stop.assert_called_once()
 
+
+    async def test_keyboard_ignores_unrelated_keys(self):
+        """Unrelated keys should not move focus or stop the event."""
+        app = FredConfigTestApp()
+
+        async with app.run_test(size=(120, 40)):
+            view = app.query_one(FredConfigView)
+            save_button = view.query_one("#save-fred-api-key", Button)
+
+            # Fokus er ikke på en af handlingsknapperne.
+            outside_event = MagicMock()
+            outside_event.key = "enter"
+
+            with patch.object(
+                type(app),
+                "focused",
+                new_callable=PropertyMock,
+                return_value=None,
+            ):
+                view.on_key(outside_event)
+
+            outside_event.stop.assert_not_called()
+
+            # Fokus er på en knap, men tasten er ikke navigation.
+            button_event = MagicMock()
+            button_event.key = "enter"
+
+            with patch.object(
+                type(app),
+                "focused",
+                new_callable=PropertyMock,
+                return_value=save_button,
+            ):
+                view.on_key(button_event)
+
+            button_event.stop.assert_not_called()
+
     async def test_keyboard_navigation_cycles_buttons(self):
         """j/down and k/up should cycle through the action buttons."""
         app = FredConfigTestApp()
