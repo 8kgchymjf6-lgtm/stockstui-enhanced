@@ -1,7 +1,8 @@
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 from textual.app import App
+from textual.widgets import Button
 from stockstui.ui.modals import (
     ConfirmDeleteModal,
     AddListModal,
@@ -790,6 +791,111 @@ class TestModals(unittest.IsolatedAsyncioTestCase):
             await pilot.click("#save")
             await pilot.pause()
             self.assertEqual(result, ("new_name", "old_desc"))
+
+
+    async def test_position_modal_cancel_and_no_delete_button(self):
+        """A new position should have no delete button, and Cancel returns None."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = "unchanged"
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = PositionModal("AAPL")
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            self.assertEqual(len(modal.query("#delete")), 0)
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+            self.assertIsNone(result)
+
+    async def test_position_modal_rejects_invalid_inputs(self):
+        """Invalid numeric input should leave the modal open."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = PositionModal("AAPL")
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            modal.query_one("#quantity-input").value = "invalid"
+            modal.query_one("#cost-input").value = "-1"
+            await pilot.pause()
+
+            await pilot.click("#save")
+            await pilot.pause()
+
+            self.assertIsNone(result)
+            self.assertIs(pilot.app.screen, modal)
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+    async def test_position_modal_handles_value_error(self):
+        """Conversion errors should be logged and leave the modal open."""
+        app = ModalsTestApp()
+
+        async with app.run_test() as pilot:
+            result = None
+
+            def set_result(value):
+                nonlocal result
+                result = value
+
+            modal = PositionModal("AAPL")
+            await pilot.app.push_screen(modal, set_result)
+            await pilot.pause()
+
+            qty_input = modal.query_one("#quantity-input")
+            cost_input = modal.query_one("#cost-input")
+
+            qty_input.value = "1"
+            cost_input.value = "2"
+            await pilot.pause()
+
+            with (
+                patch.object(
+                    type(qty_input),
+                    "is_valid",
+                    new_callable=PropertyMock,
+                    return_value=True,
+                ),
+                patch(
+                    "stockstui.ui.position_modal.float",
+                    side_effect=ValueError("conversion failed"),
+                    create=True,
+                ),
+            ):
+                await pilot.click("#save")
+                await pilot.pause()
+
+            self.assertIsNone(result)
+            self.assertIs(pilot.app.screen, modal)
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+
+    def test_position_modal_ignores_unknown_button(self):
+        """Unknown button IDs should not dismiss the modal."""
+        modal = PositionModal("AAPL")
+        modal.dismiss = MagicMock()
+
+        button = Button("Other", id="other")
+        modal.on_button_pressed(Button.Pressed(button))
+
+        modal.dismiss.assert_not_called()
 
     async def test_position_modal(self):
         """Test the PositionModal."""
