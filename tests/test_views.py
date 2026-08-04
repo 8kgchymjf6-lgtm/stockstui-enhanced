@@ -1,9 +1,11 @@
 import unittest
+import webbrowser
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from textual.app import App
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Input, Markdown
 from textual.theme import Theme
+from rich.text import Text
 from textual import on
 
 from stockstui.common import TickerDebugDataUpdated
@@ -137,6 +139,207 @@ class TestNewsView(unittest.IsolatedAsyncioTestCase):
             await pilot.press("enter")
             mock_webbrowser_open.assert_called_once_with("link2")
 
+
+    async def test_news_view_mount_uses_cached_content(self):
+        """Cached content for the active ticker should be restored on mount."""
+        view = NewsView()
+        app = ViewsTestApp(view)
+        app.news_ticker = "AAPL"
+        app._news_content_for_ticker = "AAPL"
+        app._last_news_content = ("[Cached](https://example.com)", ["https://example.com"])
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            markdown = view.query_one(Markdown)
+            self.assertFalse(markdown.loading)
+            self.assertEqual(view._link_urls, ["https://example.com"])
+            self.assertEqual(view._current_link_index, -1)
+            app.fetch_news.assert_not_called()
+
+    async def test_news_view_mount_fetches_uncached_content(self):
+        """A ticker without matching cached content should trigger a fetch."""
+        view = NewsView()
+        app = ViewsTestApp(view)
+        app.news_ticker = "MSFT"
+        app._news_content_for_ticker = "AAPL"
+        app._last_news_content = ("Old content", ["old-link"])
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            markdown = view.query_one(Markdown)
+            self.assertTrue(markdown.loading)
+            app.fetch_news.assert_called_once_with("MSFT")
+
+    async def test_news_view_empty_submit_resets_state(self):
+        """An empty submission should clear cached and link-navigation state."""
+        view = NewsView()
+        app = ViewsTestApp(view)
+
+        async with app.run_test() as pilot:
+            input_widget = view.query_one(Input)
+
+            view._link_urls = ["link"]
+            view._current_link_index = 0
+            view._original_markdown = "[Title](link)"
+            app._last_news_content = ("content", ["link"])
+            app._news_content_for_ticker = "AAPL"
+
+            view.on_news_ticker_submitted(
+                input_widget.Submitted(input_widget, "")
+            )
+
+            self.assertEqual(view._link_urls, [])
+            self.assertEqual(view._current_link_index, -1)
+            self.assertEqual(view._original_markdown, "")
+            self.assertIsNone(app._last_news_content)
+            self.assertIsNone(app._news_content_for_ticker)
+            app.fetch_news.assert_not_called()
+
+    async def test_news_view_highlight_fallbacks_and_empty_navigation(self):
+        """Non-string content, no selection, and empty link lists are harmless."""
+        view = NewsView()
+        app = ViewsTestApp(view)
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            view._original_markdown = Text("Plain content")
+            view._current_link_index = 0
+            view._highlight_current_link()
+
+            view._original_markdown = "[Title](link)"
+            view._current_link_index = -1
+            view._highlight_current_link()
+
+            view._link_urls = []
+            view.action_cycle_links()
+            view.action_cycle_links_backward()
+            view.action_open_link()
+
+            self.assertEqual(view._current_link_index, -1)
+
+    async def test_news_view_backward_navigation_moves_focus(self):
+        """Backward navigation should move focus from input to Markdown."""
+        view = NewsView()
+        app = ViewsTestApp(view)
+
+        async with app.run_test() as pilot:
+            view.update_content(
+                "[Title 1](link1)\n\n[Title 2](link2)",
+                ["link1", "link2"],
+            )
+            await pilot.pause()
+
+            input_widget = view.query_one(Input)
+            markdown = view.query_one(Markdown)
+
+            await pilot.click("#news-ticker-input")
+            await pilot.pause()
+            self.assertTrue(input_widget.has_focus)
+
+            view._current_link_index = 1
+            view.action_cycle_links_backward()
+            await pilot.pause()
+
+            self.assertTrue(markdown.has_focus)
+            self.assertEqual(view._current_link_index, 0)
+
+    async def test_news_view_open_link_error_handling(self):
+        """Browser, index, and unexpected errors should notify the user."""
+        class BrokenLinks(list):
+            def __getitem__(self, index):
+                raise IndexError("broken index")
+
+        view = NewsView()
+        app = ViewsTestApp(view)
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch.object(app, "notify") as notify:
+                view._link_urls = ["https://example.com"]
+                view._current_link_index = 0
+
+                with patch(
+                    "stockstui.ui.views.news_view.webbrowser.open",
+                    side_effect=webbrowser.Error("no browser"),
+                ):
+                    view.action_open_link()
+
+                self.assertEqual(notify.call_args.kwargs["severity"], "error")
+                self.assertEqual(notify.call_args.kwargs["timeout"], 8)
+
+                notify.reset_mock()
+                view._link_urls = BrokenLinks(["broken"])
+                view._current_link_index = 0
+                view.action_open_link()
+
+                notify.assert_called_once_with(
+                    "Internal error: Invalid link index.",
+                    severity="error",
+                )
+
+                notify.reset_mock()
+                view._link_urls = ["https://example.com"]
+                view._current_link_index = 0
+
+                with patch(
+                    "stockstui.ui.views.news_view.webbrowser.open",
+                    side_effect=RuntimeError("browser failure"),
+                ):
+                    view.action_open_link()
+
+                notify.assert_called_with(
+                    "An unexpected error occurred: browser failure",
+                    severity="error",
+                )
+
+    def test_news_view_single_link_skips_scrolling(self):
+        """A single highlighted link should not calculate scroll position."""
+        view = NewsView()
+        markdown = MagicMock()
+        markdown.virtual_size.height = 200
+        markdown.container_size.height = 100
+
+        view._original_markdown = "[Title](link1)"
+        view._link_urls = ["link1"]
+        view._current_link_index = 0
+
+        with patch.object(view, "query_one", return_value=markdown):
+            view._highlight_current_link()
+
+        markdown.update.assert_called_once_with("[➤ Title](link1)")
+        markdown.scroll_to.assert_not_called()
+
+    def test_news_view_scrolls_to_highlighted_link(self):
+        """Highlighted links should scroll proportionally in long content."""
+        view = NewsView()
+        markdown = MagicMock()
+        markdown.virtual_size.height = 300
+        markdown.container_size.height = 100
+
+        view._original_markdown = (
+            "[Title 1](link1)\n"
+            "[Title 2](link2)\n"
+            "[Title 3](link3)"
+        )
+        view._link_urls = ["link1", "link2", "link3"]
+        view._current_link_index = 1
+
+        with patch.object(view, "query_one", return_value=markdown):
+            view._highlight_current_link()
+
+        markdown.update.assert_called_once_with(
+            "[Title 1](link1)\n"
+            "[➤ Title 2](link2)\n"
+            "[Title 3](link3)"
+        )
+        markdown.scroll_to.assert_called_once_with(
+            y=100.0,
+            duration=0.2,
+        )
 
 class TestConfigContainer(unittest.IsolatedAsyncioTestCase):
     """Unit tests for the main ConfigContainer."""
