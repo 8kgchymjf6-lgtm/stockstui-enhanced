@@ -13,15 +13,15 @@ from rich.text import Text
 class TagFilterWidget(Widget):
     """A widget for filtering by tags using clickable buttons."""
 
-    def __init__(self, available_tags: list[str] = None, **kwargs) -> None:
+    def __init__(self, available_tags: list[str] | None = None, **kwargs) -> None:
         """
         Args:
             available_tags: List of available tags to create filter buttons for.
         """
         super().__init__(**kwargs)
         self.available_tags = sorted(list(set(available_tags or [])))
-        self.selected_tags = set()
-        self._tags_by_id = {}
+        self.selected_tags: set[str] = set()
+        self._tags_by_id: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
         """Creates the layout for the tag filter widget."""
@@ -65,13 +65,13 @@ class TagFilterWidget(Widget):
         self.selected_tags.clear()
 
         # Reset all tag buttons to their default appearance
-        for button in self.query(".tag-button"):
+        for button in self.query(Button).filter(".tag-button"):
             button.variant = "default"
 
         self.post_message(TagFilterChanged([]))
 
     def update_filter_status(
-        self, filtered_count: int = None, total_count: int = None
+        self, filtered_count: int | None = None, total_count: int | None = None
     ) -> None:
         """Updates the filter status display."""
         try:
@@ -123,7 +123,7 @@ class TagFilterWidget(Widget):
                 return
 
             # Group buttons by their y-coordinate (row)
-            rows = {}
+            rows: dict[int, list[Button]] = {}
             for btn in all_buttons:
                 y = btn.region.y
                 if y not in rows:

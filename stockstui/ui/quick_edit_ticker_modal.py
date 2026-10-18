@@ -83,6 +83,8 @@ class QuickEditTickerModal(ModalScreen[tuple[str, str] | None]):
             value_input = self.query_one("#value-input", Input)
 
             field = field_select.value
+            if not isinstance(field, str):
+                return
             value = value_input.value.strip()
 
             # Validate alias is not empty

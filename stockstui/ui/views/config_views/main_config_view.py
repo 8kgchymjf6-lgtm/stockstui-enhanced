@@ -56,7 +56,8 @@ class MainConfigView(Static):
     @on(Button.Pressed)
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handles button presses to navigate to different config views."""
-        container: "ConfigContainer" = self.query_ancestor("ConfigContainer")
+        from stockstui.ui.views.config_view import ConfigContainer
+        container = self.query_ancestor(ConfigContainer)
         if event.button.id == "goto-general":
             container.show_general()
         elif event.button.id == "goto-lists":

@@ -52,7 +52,9 @@ class ConfirmDeleteModal(ModalScreen[bool]):
 class ListModal(ModalScreen[str | None]):
     """A shared base modal dialog for list operations (adding, renaming, etc.)."""
 
-    def __init__(self, value: str = "", placeholder: str = "List Name", is_edit: bool = False) -> None:
+    def __init__(
+        self, value: str = "", placeholder: str = "List Name", is_edit: bool = False
+    ) -> None:
         super().__init__()
         self.value = value
         self.placeholder = placeholder
@@ -60,7 +62,11 @@ class ListModal(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         """Creates the layout for the list modal, sharing input structure and buttons."""
-        label_text = "Enter new list name:" if self.is_edit else "Enter new list name (e.g., 'crypto'):"
+        label_text = (
+            "Enter new list name:"
+            if self.is_edit
+            else "Enter new list name (e.g., 'crypto'):"
+        )
         button_label = "Save" if self.is_edit else "Add"
         button_id = "save" if self.is_edit else "add"
         with Vertical(id="dialog"):
@@ -69,7 +75,7 @@ class ListModal(ModalScreen[str | None]):
                 value=self.value,
                 placeholder=self.placeholder,
                 id="list-name-input",
-                validators=[NotEmpty()]
+                validators=[NotEmpty()],
             )
             with Horizontal(id="dialog-buttons"):
                 yield Button(button_label, variant="primary", id=button_id)
@@ -87,9 +93,9 @@ class ListModal(ModalScreen[str | None]):
             return
         input_widget = self.query_one(Input)
         target_id = "save" if self.is_edit else "add"
-        if (
-            event.button.id == target_id
-            and input_widget.validate(input_widget.value).is_valid
+        if event.button.id == target_id and (
+            (validation_result := input_widget.validate(input_widget.value)) is not None
+            and validation_result.is_valid
         ):
             self.dismiss(slugify(input_widget.value))
 
@@ -108,8 +114,9 @@ class AddListModal(ListModal):
         super().__init__(is_edit=False)
 
 
-
-class TickerModal(ModalScreen[tuple[str, str, str, str] | list[tuple[str, str, str, str]] | None]):
+class TickerModal(
+    ModalScreen[tuple[str, str, str, str] | list[tuple[str, str, str, str]] | None]
+):
     """A shared base modal dialog for ticker operations (adding, editing, etc.).
 
     Supports single-ticker mode (edit, or add without commas) and multi-ticker mode
@@ -125,7 +132,7 @@ class TickerModal(ModalScreen[tuple[str, str, str, str] | list[tuple[str, str, s
         note: str = "",
         tags: str = "",
         is_edit: bool = False,
-        context: str = "list"
+        context: str = "list",
     ) -> None:
         super().__init__()
         self.ticker = ticker
@@ -143,11 +150,17 @@ class TickerModal(ModalScreen[tuple[str, str, str, str] | list[tuple[str, str, s
             if self.is_edit:
                 yield Label("Edit ticker details:")
             else:
-                yield Label("Add stock to portfolio:" if self.context == "portfolio" else "Enter new ticker details:")
+                yield Label(
+                    "Add stock to portfolio:"
+                    if self.context == "portfolio"
+                    else "Enter new ticker details:"
+                )
 
             yield Input(
                 value=self.ticker,
-                placeholder="Ticker(s) (e.g., AAPL or AAPL,MSFT,GOOG)" if not self.is_edit else "Ticker (e.g., AAPL)",
+                placeholder="Ticker(s) (e.g., AAPL or AAPL,MSFT,GOOG)"
+                if not self.is_edit
+                else "Ticker (e.g., AAPL)",
                 id="ticker-input",
                 validators=[NotEmpty()],
             )
@@ -217,9 +230,9 @@ class TickerModal(ModalScreen[tuple[str, str, str, str] | list[tuple[str, str, s
             return
 
         ticker_input = self.query_one("#ticker-input", Input)
-        if (
-            event.button.id in ("add", "save")
-            and ticker_input.validate(ticker_input.value).is_valid
+        if event.button.id in ("add", "save") and (
+            (validation_result := ticker_input.validate(ticker_input.value)) is not None
+            and validation_result.is_valid
         ):
             raw_value = ticker_input.value.strip()
             tags_input = self.query_one("#tags-input", Input).value.strip()
@@ -230,11 +243,7 @@ class TickerModal(ModalScreen[tuple[str, str, str, str] | list[tuple[str, str, s
                 self.dismiss((raw_value.upper(), "", "", tags))
             elif self._multi_ticker_mode:
                 # Multi-ticker mode: parse comma-separated tickers, skip empties
-                tickers = [
-                    t.strip().upper()
-                    for t in raw_value.split(",")
-                    if t.strip()
-                ]
+                tickers = [t.strip().upper() for t in raw_value.split(",") if t.strip()]
                 # Return list of tuples with empty alias/note for each ticker
                 result = [(t, "", "", tags) for t in tickers]
                 self.dismiss(result)
@@ -282,9 +291,9 @@ class AddFredSeriesModal(ModalScreen[tuple[str, str, str, str] | None]):
             self.dismiss(None)
             return
         series_input = self.query_one("#series-input", Input)
-        if (
-            event.button.id == "add"
-            and series_input.validate(series_input.value).is_valid
+        if event.button.id == "add" and (
+            (validation_result := series_input.validate(series_input.value)) is not None
+            and validation_result.is_valid
         ):
             series_id = series_input.value.strip().upper()
             alias = self.query_one("#alias-input", Input).value.strip() or series_id
@@ -302,9 +311,8 @@ class EditTickerModal(TickerModal):
             note=note,
             tags=tags,
             is_edit=True,
-            context="list"
+            context="list",
         )
-
 
 
 class CompareInfoModal(ModalScreen[str | None]):
@@ -328,7 +336,9 @@ class CompareInfoModal(ModalScreen[str | None]):
     def _submit(self) -> None:
         """Validates the input and dismisses the modal with the uppercase ticker symbol."""
         ticker_input = self.query_one("#ticker-input", Input)
-        if ticker_input.validate(ticker_input.value).is_valid:
+        if (
+            validation_result := ticker_input.validate(ticker_input.value)
+        ) is not None and validation_result.is_valid:
             self.dismiss(ticker_input.value.strip().upper())
 
     @on(Button.Pressed)
@@ -348,7 +358,9 @@ class CompareInfoModal(ModalScreen[str | None]):
 class PortfolioModal(ModalScreen[tuple[str, str] | None]):
     """A shared base modal dialog for portfolio operations (creating, editing)."""
 
-    def __init__(self, name: str = "", description: str = "", is_edit: bool = False) -> None:
+    def __init__(
+        self, name: str = "", description: str = "", is_edit: bool = False
+    ) -> None:
         super().__init__()
         self.portfolio_name = name
         self.portfolio_description = description
@@ -370,7 +382,7 @@ class PortfolioModal(ModalScreen[tuple[str, str] | None]):
             yield Input(
                 value=self.portfolio_description,
                 placeholder="Description (optional)",
-                id="description-input"
+                id="description-input",
             )
             with Horizontal(id="dialog-buttons"):
                 yield Button(button_label, variant="primary", id=button_id)
@@ -388,9 +400,9 @@ class PortfolioModal(ModalScreen[tuple[str, str] | None]):
             return
         name_input = self.query_one("#name-input", Input)
         target_id = "save" if self.is_edit else "create"
-        if (
-            event.button.id == target_id
-            and name_input.validate(name_input.value).is_valid
+        if event.button.id == target_id and (
+            (validation_result := name_input.validate(name_input.value)) is not None
+            and validation_result.is_valid
         ):
             name = name_input.value.strip()
             description = self.query_one("#description-input", Input).value.strip()
@@ -408,8 +420,9 @@ class EditPortfolioModal(PortfolioModal):
     """A modal dialog for editing an existing portfolio."""
 
     def __init__(self, current_name: str, current_description: str) -> None:
-        super().__init__(name=current_name, description=current_description, is_edit=True)
-
+        super().__init__(
+            name=current_name, description=current_description, is_edit=True
+        )
 
 
 class ConfirmAddToAllPortfoliosModal(ModalScreen[bool]):
@@ -477,11 +490,11 @@ class FredSeriesModal(ModalScreen[str | None]):
             input_widget = self.query_one("#fred-series-input", Input)
             validation_result = input_widget.validate(input_widget.value)
 
-            if validation_result.is_valid:
+            if validation_result is not None and validation_result.is_valid:
                 self.dismiss(input_widget.value.strip().upper())
-            else:
+            elif validation_result is not None:
                 for failure in validation_result.failures:
                     self.app.notify(
-                        failure.description,
+                        failure.description or "Invalid value.",
                         severity="error",
                     )

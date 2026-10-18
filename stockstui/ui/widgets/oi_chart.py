@@ -1,5 +1,12 @@
 import pandas as pd
+from typing import Protocol, cast
 from textual_plotext import PlotextPlot
+
+
+class _GroupedBars(Protocol):
+    # plotext accepts grouped labels/colors at runtime; its bundled annotations
+    # describe a single series. Keep that mismatch at this one boundary.
+    def multiple_bar(self, x: list[str], y: list[list[float]], *, labels: list[str], color: list[str]) -> None: ...
 
 
 class OIChart(PlotextPlot):
@@ -42,13 +49,13 @@ class OIChart(PlotextPlot):
             return
 
         # Merge all strikes
-        all_strikes = set()
+        strike_set = set()
         if not self._calls_df.empty:
-            all_strikes.update(self._calls_df["strike"].tolist())
+            strike_set.update(self._calls_df["strike"].tolist())
         if not self._puts_df.empty:
-            all_strikes.update(self._puts_df["strike"].tolist())
+            strike_set.update(self._puts_df["strike"].tolist())
 
-        all_strikes = sorted(list(all_strikes))
+        all_strikes = sorted(strike_set)
 
         if not all_strikes:
             return
@@ -157,7 +164,7 @@ class OIChart(PlotextPlot):
             display_labels[closest_label_idx] = labels[closest_label_idx]
             labels = display_labels
 
-        plt.multiple_bar(
+        cast(_GroupedBars, plt).multiple_bar(
             labels,
             [call_oi, put_oi],
             labels=["Calls", "Puts"],
@@ -194,8 +201,8 @@ class OIChart(PlotextPlot):
             step = nice_base * magnitude
 
             # Generate ticks
-            ticks = []
-            current = 0
+            ticks: list[float] = []
+            current = 0.0
             while current <= max_oi * 1.1:  # Go slightly above max
                 ticks.append(current)
                 current += step

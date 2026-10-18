@@ -212,7 +212,7 @@ class TestNewsView(unittest.IsolatedAsyncioTestCase):
             view._current_link_index = 0
             with patch.object(markdown, "update") as update:
                 view._highlight_current_link()
-                update.assert_called_once_with(view._original_markdown)
+                update.assert_called_once_with("Plain content")
 
             view._original_markdown = "[Title](link)"
             view._current_link_index = -1

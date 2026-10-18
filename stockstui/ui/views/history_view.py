@@ -1,3 +1,8 @@
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from stockstui.main import StocksTUI
+
 from textual.containers import Vertical, Horizontal, Container
 from textual.widgets import Input, RadioButton, Switch, Static, DataTable
 from textual.app import ComposeResult, on
@@ -12,6 +17,9 @@ from stockstui.presentation import formatter
 
 class HistoryView(Vertical):
     """A view for displaying historical stock data, allowing selection of tickers and time ranges."""
+
+    if TYPE_CHECKING:
+        app: StocksTUI
 
     def compose(self) -> ComposeResult:
         """Creates the layout for the historical data view."""

@@ -1,3 +1,8 @@
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from stockstui.main import StocksTUI
+
 import re
 import webbrowser
 from typing import Union
@@ -13,6 +18,9 @@ from stockstui.ui.suggesters import TickerSuggester
 
 class NewsView(Vertical):
     """A view for displaying news articles for a selected ticker, with link navigation."""
+
+    if TYPE_CHECKING:
+        app: StocksTUI
 
     # Key bindings specific to the NewsView for navigating and opening links
     BINDINGS = [
@@ -102,7 +110,7 @@ class NewsView(Vertical):
         self._original_markdown = markdown
         self._link_urls = urls
         self._current_link_index = -1
-        markdown_widget.update(markdown)
+        markdown_widget.update(markdown.plain if isinstance(markdown, Text) else markdown)
 
     def _highlight_current_link(self):
         """
@@ -115,7 +123,7 @@ class NewsView(Vertical):
             not isinstance(self._original_markdown, str)
             or self._current_link_index == -1
         ):
-            markdown_widget.update(self._original_markdown)
+            markdown_widget.update(self._original_markdown.plain if isinstance(self._original_markdown, Text) else self._original_markdown)
             return
 
         link_pattern = re.compile(r"\[([^\]]*)\]\(([^)]*)\)")

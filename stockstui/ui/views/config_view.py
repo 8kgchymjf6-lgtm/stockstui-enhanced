@@ -44,7 +44,7 @@ class ConfigContainer(Vertical):
         """Set focus to the main container and initialize navigation history."""
         self.focus()
         # Initialize the history with the starting view.
-        self._history.append(self.query_one(ContentSwitcher).current)
+        self._history.append(self.query_one(ContentSwitcher).current or "main")
 
     def _switch_view(self, view_id: str):
         """Switches the view and updates the navigation history."""

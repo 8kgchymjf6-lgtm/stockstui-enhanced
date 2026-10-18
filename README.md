@@ -189,7 +189,22 @@ cd stocksTUI
 ./install.sh
 ```
 
-This sets up a virtual environment and a global `stockstui` command so you can test and develop from anywhere.
+This installs the checkout into a local virtual environment. Run
+`.venv/bin/stockstui` (or `venv/bin/stockstui` if that environment already exists).
+It preserves an existing pipx/global launcher. Use `./install.sh --dev` to include
+test tools. The script can be called from any working directory.
+
+To explicitly create a global command, use `./install.sh --link`. Replacing an
+existing symlink additionally requires `--replace-launcher`; regular files are
+never overwritten. `--venv PATH` and `--bin-dir PATH` select alternative locations.
+For an already prepared environment, `--offline --no-deps` avoids network access
+and dependency changes.
+
+Run `./run_tests.sh` for the full suite and the 80% coverage gate with branch measurement enabled. It does
+not install packages and uses isolated temporary configuration/cache directories.
+Set `STOCKSTUI_PYTHON=/path/to/python` to choose an environment explicitly.
+`--no-coverage` is an explicit diagnostic option, not the CI default. See
+[local stability and validation](docs/STABILITY.md) for the enhanced build.
 
 ---
 

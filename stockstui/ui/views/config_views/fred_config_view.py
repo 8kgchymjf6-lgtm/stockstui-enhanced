@@ -1,3 +1,8 @@
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from stockstui.main import StocksTUI
+
 from stockstui.ui.config_errors import config_errors
 from textual.containers import Vertical, Horizontal, ScrollableContainer
 from textual.widgets import Button, DataTable, Input, Label, Switch
@@ -14,6 +19,9 @@ from stockstui.ui.edit_fred_series_modal import EditFredSeriesModal
 
 class FredConfigView(ScrollableContainer):
     """A view for configuring FRED integration settings."""
+
+    if TYPE_CHECKING:
+        app: StocksTUI
 
     BINDINGS = [
         Binding("j, down", "focus_next", "Next", show=False),
@@ -281,6 +289,8 @@ class FredConfigView(ScrollableContainer):
             return
 
         series_id = row_key.value
+        if not series_id:
+            return
         settings = self.app.config.settings.get("fred_settings", {})
         aliases = settings.get("series_aliases", {})
         current_alias = aliases.get(series_id, "")

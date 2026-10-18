@@ -1,6 +1,7 @@
 """Keep provider quote times distinct from fetch times and intraday bar starts."""
 from datetime import datetime, timezone
 import math
+from typing import Any, Mapping
 
 
 def parse_quote_time(value) -> datetime | None:
@@ -41,7 +42,7 @@ def replace_quote_time(target: dict, update: dict) -> None:
                   else quote_time_fields(None, "quote"))
 
 
-def format_quote_time(row: dict) -> str:
+def format_quote_time(row: Mapping[str, Any]) -> str:
     stamp = parse_quote_time(row.get("_quote_at"))
     kind = row.get("_quote_time_kind")
     if stamp is None or kind not in ("quote", "bar_start"):

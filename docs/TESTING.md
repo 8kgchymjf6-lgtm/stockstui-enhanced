@@ -1,3 +1,6 @@
+> Historical checks for the earlier enhanced build. For the current stability
+> work, automated gates and limitations, see [STABILITY.md](STABILITY.md).
+
 # Testing - StockSTUI Enhanced
 
 This document records the automated and manual checks performed for the

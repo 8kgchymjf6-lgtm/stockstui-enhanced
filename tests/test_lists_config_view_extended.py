@@ -2,7 +2,8 @@ import unittest
 from unittest.mock import MagicMock, AsyncMock, patch
 from textual.app import App
 from textual.dom import NoMatches
-from textual.widgets import ListView, DataTable, Button, Switch
+from textual.widgets import ListView, DataTable, Button, Switch, Input
+from stockstui.ui.modals import EditTickerModal
 
 from stockstui.ui.views.config_views.lists_config_view import ListsConfigView
 
@@ -602,26 +603,20 @@ class TestListsConfigView(unittest.IsolatedAsyncioTestCase):
             self.assertGreaterEqual(app._rebuild_visible_columns.call_count, 1)
 
     async def test_on_row_selected(self):
-        """Test row selection event."""
+        """Enter opens a fully mounted ticker editor and cancel preserves data."""
         app = ListsConfigViewTestApp()
-
-        async with app.run_test():
+        async with app.run_test() as pilot:
             view = app.query_one(ListsConfigView)
-
-            # Ensure a category is selected and table has a row
             app.active_list_category = "stocks"
-
-            # Create a mock event for row selection
-            class MockEvent:
-                def __init__(self, control):
-                    self.control = control
-
-            ticker_table = view.query_one("#ticker-table", DataTable)
-            mock_event = MockEvent(ticker_table)
-
-            # Call the handler
-            view.on_row_selected(mock_event)
-
+            table = view.query_one("#ticker-table", DataTable)
+            table.focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertIsInstance(app.screen, EditTickerModal)
+            self.assertEqual(app.screen.query_one("#ticker-input", Input).value, "AAPL")
+            await pilot.click("#cancel")
+            await pilot.pause()
+            app.config.save_lists.assert_not_called()
 
     async def test_repopulate_lists_excludes_session_lists(self):
         """Session-only lists should not appear in persistent list management."""

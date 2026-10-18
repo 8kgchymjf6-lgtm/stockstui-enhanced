@@ -48,7 +48,7 @@ from rich.style import Style
 from textual.color import Color
 from platformdirs import PlatformDirs
 
-from stockstui.quote_time import parse_quote_time, format_quote_time
+from stockstui.quote_status import status_display, summarize_quotes
 from stockstui.config_manager import ConfigManager, ConfigSaveError
 from stockstui.common import (
     PriceDataUpdated,
@@ -219,7 +219,7 @@ class StocksTUI(App):
         self.cli_overrides = cli_overrides or {}
         self._closing = False
         self._price_request_serial = 0
-        self._current_price_worker = None
+        self._current_price_worker: Worker | None = None
         self._history_request_serial = 0
         self._history_request_key: tuple[str, str, str] | None = None
         self._current_history_worker: Worker | None = None
@@ -694,7 +694,7 @@ class StocksTUI(App):
                 continue
 
             try:
-                resolved_theme_dict = copy.deepcopy(BASE_THEME_STRUCTURE)
+                resolved_theme_dict: dict[str, Any] = copy.deepcopy(BASE_THEME_STRUCTURE)
                 resolved_theme_dict = substitute_colors(resolved_theme_dict, palette)
                 resolved_theme_dict["dark"] = theme_data.get("dark", False)
 
@@ -2836,60 +2836,13 @@ class StocksTUI(App):
 
     def _show_quote_status(self, text, data=None):
         label = self.query_one("#last-refresh-time", Label)
-        details = []
-        fetch_times = []
-        for row in data or []:
-            fetched = parse_quote_time(row.get("_fetched_at"))
-            if fetched:
-                fetch_times.append(fetched)
-            fetched_text = fetched.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z") if fetched else "unknown"
-            state = "; cached/unverified" if row.get("_stale", True) else ""
-            details.append(f"{row.get('symbol', '?')}: {format_quote_time(row)}; fetched {fetched_text}{state}")
-        # Preserve the original status-bar appearance; details stay in the tooltip.
-        display_text = text
-        if data is not None:
-            fetch_text = min(fetch_times).astimezone().strftime("%H:%M:%S") if fetch_times else "Unknown"
-            display_text = f"Last Refresh: {fetch_text}"
+        display_text, tooltip = status_display(text, data)
         label.update(Text(display_text))
-        label.tooltip = Text(text + ("\n" + "\n".join(details) if details else ""))
+        label.tooltip = Text(tooltip)
 
     @staticmethod
     def _quote_status(data):
-        timestamps = []
-        stale = []
-        for row in data:
-            try:
-                stamp = datetime.fromisoformat(row.get("_fetched_at", ""))
-                if stamp.tzinfo is not None:
-                    timestamps.append(stamp)
-            except (ValueError, TypeError):
-                pass
-            if row.get("_stale", True):
-                stale.append(row.get("symbol", "?"))
-        oldest = min(timestamps).astimezone().strftime("%Y-%m-%d %H:%M:%S") if timestamps else "unknown"
-        quote_times = {"quote": [], "bar_start": []}
-        unknown = []
-        for row in data:
-            stamp = parse_quote_time(row.get("_quote_at"))
-            kind = row.get("_quote_time_kind")
-            if stamp is not None and kind in quote_times:
-                quote_times[kind].append(stamp)
-            else:
-                unknown.append(str(row.get("symbol", "?")))
-        parts = []
-        for kind, title in (("quote", "Oldest quote"), ("bar_start", "Oldest 1m bar start")):
-            if quote_times[kind]:
-                parts.append(f"{title}: {min(quote_times[kind]).astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        if unknown:
-            parts.append(f"Quote time unknown: {len(unknown)}")
-        parts.append(f"Oldest known fetch: {oldest}")
-        text = "; ".join(parts)
-        if stale:
-            warning = "cached/unverified: " + ", ".join(stale[:3])
-            if len(stale) > 3:
-                warning += f" (+{len(stale)-3})"
-            text = warning + "; " + text
-        return text
+        return summarize_quotes(data)
 
     def _refresh_search_snapshot(self, table):
         if self.search_target_table is not table:
@@ -2897,6 +2850,8 @@ class StocksTUI(App):
         try:
             search = self.query_one(SearchBox)
         except NoMatches:
+            return
+        if table is None:
             return
         self._original_table_data = [(key, table.get_row(key)) for key in table.rows]
         self._apply_search(search.value)

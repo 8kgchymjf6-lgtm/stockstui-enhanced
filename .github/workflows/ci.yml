@@ -29,19 +29,11 @@ jobs:
     - name: Lint with ruff
       run: |
         # Fail on Python syntax errors and undefined names.
-        ruff check . --select=E9,F63,F7,F82
+        ruff check stockstui tests --select=E9,F63,F7,F82
 
     - name: Type check with mypy
       run: |
         mypy stockstui
 
-    - name: Test with unittest and hypothesis
-      run: |
-        coverage run --source=stockstui -m unittest discover -s tests -p 'test_*.py'
-        coverage report
-
-    - name: Mutation testing with mutmut (Formatter only)
-      run: |
-        # Running mutation testing only on the formatter to keep CI fast
-        mutmut run --max-children 1 || true
-        mutmut results
+    - name: Test and enforce coverage
+      run: ./run_tests.sh

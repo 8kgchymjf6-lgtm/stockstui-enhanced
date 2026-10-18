@@ -1,7 +1,13 @@
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from stockstui.main import StocksTUI
+
 from stockstui.ui.config_errors import config_errors
 import logging
 from textual.containers import Vertical, Horizontal
 from textual.widgets import Button, DataTable, Label, ListView, ListItem, Switch
+from textual.coordinate import Coordinate
 from textual.app import ComposeResult, on
 from textual.dom import NoMatches
 from rich.text import Text
@@ -18,6 +24,9 @@ from stockstui.utils import extract_cell_text
 
 class ListsConfigView(Vertical):
     """A view for managing watchlists and the tickers within them."""
+
+    if TYPE_CHECKING:
+        app: StocksTUI
 
     def compose(self) -> ComposeResult:
         """Creates the layout for the list and ticker management view."""
@@ -353,9 +362,12 @@ class ListsConfigView(Vertical):
         self.app.push_screen(EditListModal(category), on_close)
 
     @on(DataTable.RowSelected, "#ticker-table")
-    def on_row_selected(self, event: DataTable.RowSelected):
+    @on(DataTable.CellSelected, "#ticker-table")
+    async def on_row_selected(
+        self, event: DataTable.RowSelected | DataTable.CellSelected
+    ):
         """Trigger editing when a row is selected with Enter."""
-        self.on_edit_ticker_pressed()
+        await self.on_edit_ticker_pressed()
 
     @on(Button.Pressed, "#edit_ticker")
     async def on_edit_ticker_pressed(self):
@@ -417,7 +429,7 @@ class ListsConfigView(Vertical):
         if not self.app.active_list_category or table.cursor_row < 0:
             self.app.notify("Select a ticker to delete.", severity="warning")
             return
-        ticker = extract_cell_text(table.get_cell_at((table.cursor_row, 0)))
+        ticker = extract_cell_text(table.get_cell_at(Coordinate(table.cursor_row, 0)))
 
         @config_errors(app=self.app)
         def on_close(confirmed: bool):

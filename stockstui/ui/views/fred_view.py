@@ -1,3 +1,8 @@
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from stockstui.main import StocksTUI
+
 from stockstui.ui.config_errors import config_errors
 from textual.app import ComposeResult
 from textual.containers import Vertical
@@ -44,6 +49,9 @@ class FredDataTable(NavigableDataTable):
 
 class FredView(Vertical):
     """View displaying a summary dashboard of configured FRED series."""
+
+    if TYPE_CHECKING:
+        app: StocksTUI
 
     BINDINGS = [
         Binding("i", "focus_table", "Focus Table", show=False),
@@ -99,6 +107,8 @@ class FredView(Vertical):
                 return
 
             series_id = row_key.value
+            if not series_id:
+                return
 
             settings = self.app.config.settings.get("fred_settings", {})
             aliases = settings.get("series_aliases", {})
@@ -177,7 +187,7 @@ class FredView(Vertical):
 
         # Fetch FRED series summaries concurrently to avoid O(n * latency) blocking
         max_workers = min(len(series_list), 4)
-        summaries = [None] * len(series_list)
+        summaries: list[dict | None] = [None] * len(series_list)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_index = {
                 executor.submit(fred_provider.get_series_summary, series_id, api_key): i

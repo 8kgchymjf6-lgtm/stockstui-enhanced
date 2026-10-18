@@ -692,6 +692,8 @@ class TestOptionsView(unittest.IsolatedAsyncioTestCase):
             callback((0, 4.0))
             app.remove_option_position.assert_called_once_with("AAPL-CALL")
 
+            # A late dialog result must keep the instrument it was opened for.
+            app.options_ticker = "MSFT"
             callback((3, 5.5))
             app.add_option_position.assert_called_once_with(
                 "AAPL-CALL",

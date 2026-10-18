@@ -1,64 +1,39 @@
-#!/bin/bash
-#
-# This script discovers and runs all unit tests for the stocksTUI application.
-# It uses Python's built-in unittest module and the 'coverage' package.
-# It will attempt to activate a virtual environment named 'venv'.
-#
-# Usage:
-#   ./run_tests.sh
-#
-# To run without coverage:
-#   ./run_tests.sh --no-coverage
-#
-
-# --- Script Start ---
-
-# Activate virtual environment if it exists
-if [ -d ".venv" ]; then
-    echo "Activating virtual environment (.venv)..."
-    source .venv/bin/activate
-elif [ -d "venv" ]; then
-    echo "Activating virtual environment (venv)..."
-    source venv/bin/activate
+#!/usr/bin/env bash
+# Run from any directory, without installing or upgrading packages.
+set -euo pipefail
+PROJECT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+case "${1:-}" in
+  "") with_coverage=true ;;
+  --no-coverage) with_coverage=false; shift ;;
+  -h|--help) echo "Usage: $0 [--no-coverage] (optional STOCKSTUI_PYTHON=/path/to/python)"; exit 0 ;;
+  *) echo "Unknown argument: $1" >&2; exit 2 ;;
+esac
+if (( $# )); then echo "Unexpected arguments: $*" >&2; exit 2; fi
+if [[ -n "${STOCKSTUI_PYTHON:-}" ]]; then
+  test_python="$STOCKSTUI_PYTHON"
+elif [[ -x "$PROJECT_DIR/.venv/bin/python" ]]; then
+  test_python="$PROJECT_DIR/.venv/bin/python"
+elif [[ -x "$PROJECT_DIR/venv/bin/python" ]]; then
+  test_python="$PROJECT_DIR/venv/bin/python"
 else
-    echo "Warning: No virtual environment directory found. Assuming dependencies are in the global scope."
+  test_python=$(command -v python3)
 fi
-
-# Ensure dev dependencies are installed
-pip install .[dev] > /dev/null 2>&1
-
-# Check if coverage is installed
-if ! python3 -m coverage --version > /dev/null 2>&1; then
-    echo "Coverage.py is not installed. Please install it with 'pip install coverage'."
-    echo "Running tests without coverage."
-    exec python3 -m unittest discover -s tests -p 'test_*.py' -v
-    exit $?
-fi
-
-# Check for --no-coverage flag
-if [ "$1" == "--no-coverage" ]; then
-    echo "Running stocksTUI unit tests without coverage..."
-    exec python3 -m unittest discover -s tests -p 'test_*.py' -v
-    exit $?
-fi
-
-echo "Running stocksTUI unit tests with coverage..."
-
-# The 'coverage run -m' command executes the unittest module under coverage.
-# We specify the source directory to get accurate reporting.
-coverage run --source=stockstui -m unittest discover -s tests -p 'test_*.py' -v
-
-# Check the exit code of the test command
-TEST_EXIT_CODE=$?
-
-if [ ${TEST_EXIT_CODE} -eq 0 ]; then
-  echo "All tests passed successfully."
-  echo "--- Coverage Report ---"
-  # Generate a report in the terminal. --fail-under=80 will exit with an error
-  # if coverage is below 80%.
-  coverage report --fail-under=80
+cd -- "$PROJECT_DIR"
+test_tmp=$(mktemp -d "${TMPDIR:-/tmp}/stockstui-tests.XXXXXX")
+trap 'rm -rf -- "$test_tmp"' EXIT
+export XDG_CONFIG_HOME="$test_tmp/config"
+export XDG_CACHE_HOME="$test_tmp/cache"
+export XDG_DATA_HOME="$test_tmp/data"
+export HYPOTHESIS_STORAGE_DIRECTORY="$test_tmp/hypothesis"
+if [[ "$with_coverage" == false ]]; then
+  "$test_python" -m unittest discover -s tests -t . -p 'test_*.py' -v
 else
-  echo "Some tests failed. Skipping coverage report."
+  if ! "$test_python" -m coverage --version >/dev/null 2>&1; then
+    echo "Coverage is required. Install the dev dependencies, or explicitly use --no-coverage." >&2
+    exit 2
+  fi
+  "$test_python" -m coverage run -m unittest discover -s tests -t . -p 'test_*.py' -v
+  # The threshold comes from pyproject.toml. Its nonzero status must reach CI.
+  "$test_python" -m coverage report
 fi
-
-exit ${TEST_EXIT_CODE}
+echo "All requested test checks passed."

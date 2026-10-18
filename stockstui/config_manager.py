@@ -2,12 +2,13 @@ import json
 from pathlib import Path
 import logging
 import os
+import sys
 import copy
 import time
 import errno
 from contextlib import contextmanager
 
-if os.name == "nt":
+if sys.platform == "win32":
     import msvcrt
 else:
     import fcntl
@@ -27,7 +28,7 @@ dirs = PlatformDirs(APP_NAME, APP_AUTHOR)
 @contextmanager
 def _configuration_lock(path, timeout=2.0):
     with open(path, "a+b") as lock:
-        if os.name == "nt":
+        if sys.platform == "win32":
             if lock.tell() == 0:
                 lock.write(b"0")
                 lock.flush()
@@ -35,7 +36,7 @@ def _configuration_lock(path, timeout=2.0):
         deadline = time.monotonic() + timeout
         while True:
             try:
-                if os.name == "nt":
+                if sys.platform == "win32":
                     msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
                 else:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -51,7 +52,7 @@ def _configuration_lock(path, timeout=2.0):
         try:
             yield
         finally:
-            if os.name == "nt":
+            if sys.platform == "win32":
                 lock.seek(0)
                 msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
             else:

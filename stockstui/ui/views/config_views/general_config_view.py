@@ -1,3 +1,8 @@
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from stockstui.main import StocksTUI
+
 from stockstui.ui.config_errors import config_errors
 from textual.containers import Vertical, Horizontal
 from textual.widgets import Button, Input, Label, Select, Switch, ListView, ListItem
@@ -11,6 +16,9 @@ from stockstui.config_validation import MARKET_CALENDAR_CHOICES
 
 class GeneralConfigView(Vertical):
     """A view for configuring general application settings and tab visibility."""
+
+    if TYPE_CHECKING:
+        app: StocksTUI
 
     BINDINGS = [
         Binding("j, down", "focus_next", "Next", show=False),
@@ -113,15 +121,15 @@ class GeneralConfigView(Vertical):
         input_widget = self.query_one("#refresh-interval-input", Input)
         validation_result = input_widget.validate(input_widget.value)
 
-        if validation_result.is_valid:
+        if validation_result is not None and validation_result.is_valid:
             self.app.config.settings["refresh_interval"] = float(input_widget.value)
             self.app.config.save_settings()
             self.app._manage_price_refresh_timer()
             self.app.notify("Refresh interval updated.")
         else:
-            if validation_result.failures:
+            if validation_result is not None and validation_result.failures:
                 error_message = ". ".join(
-                    f.description for f in validation_result.failures
+                    f.description or "Invalid interval value" for f in validation_result.failures
                 )
                 self.app.notify(error_message, severity="error", timeout=5)
             else:
@@ -167,7 +175,7 @@ class GeneralConfigView(Vertical):
             return
 
         setting = {"default-tab-select": "default_tab_category", "theme-select": "theme",
-                   "market-calendar-select": "market_calendar"}.get(event.select.id)
+                   "market-calendar-select": "market_calendar"}.get(event.select.id or "")
         if setting is None:
             return
         self.app.config.settings[setting] = str(event.value)

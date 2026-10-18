@@ -1,3 +1,8 @@
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from stockstui.main import StocksTUI
+
 from textual.containers import Vertical, Horizontal, Container
 from textual.widgets import Button, Static
 from textual.app import ComposeResult, on
@@ -10,6 +15,9 @@ from stockstui.ui.widgets.navigable_data_table import NavigableDataTable
 
 class DebugView(Vertical):
     """A view for running various debug tests related to data fetching and caching."""
+
+    if TYPE_CHECKING:
+        app: StocksTUI
 
     def compose(self) -> ComposeResult:
         """Creates the layout for the debug view."""

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stocksTUI"
-version = "0.1.0-b14"
+version = "0.1.0b14+enhanced.20261018.1"
 authors = [
   { name="Andriy", email="project-git@techie.com" },
 ]
@@ -50,29 +50,17 @@ dev = [
     "coverage",
     "hypothesis",
     "pydantic",
-    "mutmut",
 ]
+mutation = ["mutmut"]
 
 [tool.mypy]
 ignore_missing_imports = true
-check_untyped_defs = false
+check_untyped_defs = true
 disallow_untyped_defs = false
 warn_return_any = false
 warn_unused_configs = true
+warn_unused_ignores = true
 exclude = ["venv", ".venv", "build", "dist"]
-
-
-[[tool.mypy.overrides]]
-module = "stockstui.ui.*"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = "stockstui.data_providers.*"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = "stockstui.presentation.*"
-ignore_errors = true
 
 
 [project.urls]
@@ -93,3 +81,12 @@ include = ["stockstui*"]
 source_paths = ["stockstui/presentation/formatter.py"]
 pytest_add_cli_args_test_selection = ["tests/test_formatter.py"]
 runner = "python -m unittest tests/test_formatter.py"
+
+[tool.coverage.run]
+source = ["stockstui"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 80
+precision = 2
+show_missing = true

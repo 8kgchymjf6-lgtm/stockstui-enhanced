@@ -1,3 +1,8 @@
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from stockstui.main import StocksTUI
+
 import math
 from datetime import datetime
 from textual.containers import Vertical, Horizontal, Container
@@ -24,6 +29,9 @@ from stockstui.presentation.formatter import get_currency_symbol
 
 class OptionsView(Vertical):
     """A view for displaying stock options chains, allowing selection of tickers and expiration dates."""
+
+    if TYPE_CHECKING:
+        app: StocksTUI
 
     BINDINGS = [
         Binding("p", "manage_position", "Position", show=True),
@@ -185,7 +193,7 @@ class OptionsView(Vertical):
             # Helper to create table
             def create_table(df, table_id, label_text, is_call):
                 label = Label(label_text, classes="options-table-header")
-                table = DataTable(id=table_id, zebra_stripes=True)
+                table: DataTable = DataTable(id=table_id, zebra_stripes=True)
                 table.cursor_type = "row"
 
                 if df.empty:
@@ -312,7 +320,7 @@ class OptionsView(Vertical):
 
             # --- CHART VIEW ---
             chart = OIChart(
-                calls_df, puts_df, underlying_price, ticker=self.app.options_ticker, currency_symbol=sym
+                calls_df, puts_df, underlying_price, ticker=self.app.options_ticker or "", currency_symbol=sym
             )
             chart_container = Container(chart, id="options-chart-view")
 
@@ -418,6 +426,9 @@ class OptionsView(Vertical):
 
         # Get current position if exists
         current_pos = self.app.option_positions.get(contract_symbol)
+        position_ticker = self.app.options_ticker
+        if position_ticker is None:
+            return
 
         def handle_position_result(result: tuple[float, float] | None):
             if result is None:
@@ -428,7 +439,7 @@ class OptionsView(Vertical):
                 self.app.remove_option_position(contract_symbol)
             else:
                 self.app.add_option_position(
-                    contract_symbol, self.app.options_ticker, qty, cost
+                    contract_symbol, position_ticker, qty, cost
                 )
 
             # Refresh view to show new position
