@@ -1,6 +1,8 @@
 import sqlite3
 import json
 import logging
+from functools import wraps
+from threading import RLock
 from pathlib import Path
 from datetime import datetime, timezone
 from stockstui.utils import merge_price_data
@@ -17,6 +19,16 @@ CACHE_PRUNE_EXPIRY_SECONDS = 604800  # 7 days
 INFO_CACHE_EXPIRY_SECONDS = 86400 * 30  # 30 days
 
 
+def _with_connection_lock(method):
+    """Keep each connection operation, including its transaction, indivisible."""
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._connection_lock:
+            return method(self, *args, **kwargs)
+
+    return locked
+
+
 class DbManager:
     """
     Manages the persistent SQLite database for caching application data, primarily
@@ -30,6 +42,7 @@ class DbManager:
         Args:
             db_path: The file path for the SQLite database.
         """
+        self._connection_lock = RLock()
         self.db_path = db_path
         self.conn = None
         try:
@@ -39,13 +52,10 @@ class DbManager:
                 str(self.db_path), isolation_level="", check_same_thread=False
             )  # type: ignore
 
-            # WAL (Write-Ahead Logging) mode allows concurrent readers while a writer
-            # is active, eliminating "database is locked" errors from background worker
-            # threads using check_same_thread=False. WAL is persistent on the file, so
-            # setting it on each connect is harmless and makes the intent explicit.
-            # busy_timeout tells SQLite to retry for up to 5 seconds before raising on
-            # any residual writer-vs-writer lock contention (e.g. if the OS is slow to
-            # release locks), instead of failing immediately.
+            # WAL lets other connections read while a writer is active. The
+            # instance lock also serializes threads sharing this connection.
+            # BEGIN IMMEDIATE reserves the write lock before reading old values,
+            # allowing busy_timeout to wait for writers on other connections.
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.execute("PRAGMA busy_timeout=5000")
 
@@ -54,14 +64,14 @@ class DbManager:
         except sqlite3.Error as e:
             logging.error(f"Database connection failed for '{self.db_path}': {e}")
 
-
+    @_with_connection_lock
     def _create_tables(self):
         """Creates the necessary tables in the database if they don't already exist."""
         if not self.conn:
             return
         try:
             cursor = self.conn.cursor()
-            cursor.execute("BEGIN TRANSACTION")
+            cursor.execute("BEGIN IMMEDIATE")
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS price_cache (
                     ticker TEXT PRIMARY KEY,
@@ -99,13 +109,14 @@ class DbManager:
             logging.error(f"Failed to create database tables: {e}")
             self.conn.rollback()
 
+    @_with_connection_lock
     def _prune_expired_entries(self):
         """Removes entries from the persistent cache that are older than their prune expiry date."""
         if not self.conn:
             return
         try:
             cursor = self.conn.cursor()
-            cursor.execute("BEGIN TRANSACTION")
+            cursor.execute("BEGIN IMMEDIATE")
 
             price_prune_ts = (
                 datetime.now(timezone.utc).timestamp() - CACHE_PRUNE_EXPIRY_SECONDS
@@ -134,6 +145,7 @@ class DbManager:
             logging.error(f"Failed to prune expired cache entries: {e}")
             self.conn.rollback()
 
+    @_with_connection_lock
     def load_price_cache_from_db(self) -> dict:
         """Loads the price cache from the database, filtering for entries fresh enough to use."""
         if not self.conn:
@@ -167,6 +179,7 @@ class DbManager:
         )
         return loaded_data
 
+    @_with_connection_lock
     def load_info_cache_from_db(self) -> dict:
         """Loads the ticker info cache (exchange, name, currency) from the database."""
         if not self.conn:
@@ -195,6 +208,7 @@ class DbManager:
         logging.info(f"Loaded {len(loaded_data)} items from the persistent info cache.")
         return loaded_data
 
+    @_with_connection_lock
     def save_price_cache_to_db(self, cache_data: dict):
         """
         Saves the in-memory price cache to the database, merging field-level updates
@@ -205,7 +219,7 @@ class DbManager:
 
         try:
             cursor = self.conn.cursor()
-            cursor.execute("BEGIN TRANSACTION")
+            cursor.execute("BEGIN IMMEDIATE")
 
             for ticker, cache_entry in cache_data.items():
                 try:
@@ -246,6 +260,7 @@ class DbManager:
             if self.conn:
                 self.conn.rollback()
 
+    @_with_connection_lock
     def save_info_cache_to_db(self, cache_data: dict):
         """Saves the in-memory info cache to the database."""
         if not self.conn or not cache_data:
@@ -267,7 +282,7 @@ class DbManager:
             return
         try:
             cursor = self.conn.cursor()
-            cursor.execute("BEGIN TRANSACTION")
+            cursor.execute("BEGIN IMMEDIATE")
             cursor.executemany(
                 "INSERT OR REPLACE INTO ticker_info (ticker, exchange, short_name, long_name, currency, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
                 items_to_save,
@@ -282,6 +297,7 @@ class DbManager:
 
     # --- Option Positions Methods ---
 
+    @_with_connection_lock
     def save_option_position(
         self, symbol: str, ticker: str, quantity: float, avg_cost: float
     ):
@@ -290,7 +306,7 @@ class DbManager:
             return
         try:
             cursor = self.conn.cursor()
-            cursor.execute("BEGIN TRANSACTION")
+            cursor.execute("BEGIN IMMEDIATE")
             timestamp = datetime.now(timezone.utc).timestamp()
             cursor.execute(
                 """
@@ -306,6 +322,7 @@ class DbManager:
             if self.conn:
                 self.conn.rollback()
 
+    @_with_connection_lock
     def get_option_position(self, symbol: str) -> dict | None:
         """Retrieves a specific option position."""
         if not self.conn:
@@ -329,13 +346,14 @@ class DbManager:
             logging.error(f"Failed to get option position {symbol}: {e}")
             return None
 
+    @_with_connection_lock
     def delete_option_position(self, symbol: str):
         """Deletes an option position."""
         if not self.conn:
             return
         try:
             cursor = self.conn.cursor()
-            cursor.execute("BEGIN TRANSACTION")
+            cursor.execute("BEGIN IMMEDIATE")
             cursor.execute("DELETE FROM option_positions WHERE symbol = ?", (symbol,))
             self.conn.commit()
             logging.info(f"Deleted option position: {symbol}")
@@ -344,6 +362,7 @@ class DbManager:
             if self.conn:
                 self.conn.rollback()
 
+    @_with_connection_lock
     def get_all_option_positions(self) -> dict:
         """Retrieves all option positions, keyed by symbol."""
         if not self.conn:
@@ -367,8 +386,10 @@ class DbManager:
             logging.error(f"Failed to get all option positions: {e}")
             return {}
 
+    @_with_connection_lock
     def close(self):
         """Closes the database connection if it's open."""
         if self.conn:
             self.conn.close()
+            self.conn = None
             logging.info("Database connection closed.")
