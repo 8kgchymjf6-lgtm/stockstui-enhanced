@@ -34,8 +34,10 @@ class TestCommonMessages(unittest.TestCase):
         self.assertEqual(msg.status, {"status": "open"})
 
     def test_historical_data_updated(self):
-        msg = HistoricalDataUpdated({"df": "fake"})
+        msg = HistoricalDataUpdated({"df": "fake"}, "AAPL", "1mo", "1d", 7)
         self.assertEqual(msg.data, {"df": "fake"})
+        self.assertEqual((msg.ticker, msg.period, msg.interval, msg.request_id),
+                         ("AAPL", "1mo", "1d", 7))
 
     def test_ticker_info_comparison_updated(self):
         msg = TickerInfoComparisonUpdated({"fast": 1}, {"slow": 2}, {"batch": 3}, {"prepost": 4})

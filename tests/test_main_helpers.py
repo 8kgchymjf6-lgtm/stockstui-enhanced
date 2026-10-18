@@ -1,4 +1,4 @@
-from stockstui.common import PriceDataUpdated
+from stockstui.common import PriceDataUpdated, HistoricalDataUpdated
 import unittest
 import webbrowser
 from datetime import datetime, timedelta, timezone
@@ -1295,7 +1295,7 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
         worker = MagicMock()
         worker.is_cancelled = False
 
-        method = StocksTUI.fetch_historical_data.__wrapped__
+        method = StocksTUI._fetch_historical_data.__wrapped__
 
         with (
             patch(
@@ -1323,12 +1323,14 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
 
         app.post_message.assert_not_called()
 
+        worker.is_cancelled = False
         with (
             patch(
                 "stockstui.main.market_provider.get_historical_data",
                 side_effect=RuntimeError("history error"),
             ),
             patch("stockstui.main.logging.error") as log_error,
+            patch("stockstui.main.get_current_worker", return_value=worker),
         ):
             method(app, "AAPL", "1mo")
 
@@ -1738,8 +1740,9 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
 
     async def test_historical_data_updated_paths(self):
         app = create_mocked_app()
-        message = MagicMock()
-        message.data = {"history": True}
+        app.history_ticker = "AAPL"
+        app._history_request_key = ("AAPL", "1mo", "1d")
+        message = HistoricalDataUpdated({"history": True}, "AAPL", "1mo", "1d", 0)
 
         display_container = MagicMock()
         history_view = MagicMock()

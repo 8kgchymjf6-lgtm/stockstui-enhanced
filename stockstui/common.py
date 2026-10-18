@@ -33,8 +33,12 @@ class MarketStatusUpdated(Message):
 class HistoricalDataUpdated(Message):
     """Posted when historical data for a ticker has been fetched."""
 
-    def __init__(self, data) -> None:  # Data will likely be a pandas DataFrame
+    def __init__(self, data, ticker: str, period: str, interval: str, request_id: int) -> None:
         self.data = data
+        self.ticker = ticker
+        self.period = period
+        self.interval = interval
+        self.request_id = request_id
         super().__init__()
 
 

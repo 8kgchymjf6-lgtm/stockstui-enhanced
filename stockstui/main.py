@@ -14,6 +14,7 @@ import subprocess
 import argparse
 import webbrowser
 
+import pandas as pd
 import yfinance as yf
 from rich.console import Console
 from rich.table import Table
@@ -218,6 +219,10 @@ class StocksTUI(App):
         self._closing = False
         self._price_request_serial = 0
         self._current_price_worker = None
+        self._history_request_serial = 0
+        self._history_request_key: tuple[str, str, str] | None = None
+        self._current_history_worker: Worker | None = None
+        self._history_interval = "1d"
 
         # Initialize the last_key attribute. This ensures it always exists.
         self.last_key: events.Key | None = None
@@ -1397,17 +1402,53 @@ class StocksTUI(App):
             if not get_current_worker().is_cancelled:
                 self.post_message(NewsDataUpdated(tickers_str, None))
 
-    @work(exclusive=True, thread=True, group="fetch_historical_data")
     def fetch_historical_data(self, ticker: str, period: str, interval: str = "1d"):
-        """Worker to fetch historical price data for a specific ticker."""
+        """Assign a generation on the UI thread before starting a history worker."""
+        if self._closing:
+            return None
+        key = (ticker, period, interval)
+        if key != self._history_request_key:
+            # A view toggle must not render the previous selection while loading.
+            self._last_historical_data = None
+        self._history_request_key = key
+        self._history_period = period
+        self._history_interval = interval
+        self._history_request_serial += 1
+        worker = self._fetch_historical_data(
+            ticker, period, interval, request_id=self._history_request_serial
+        )
+        self._current_history_worker = worker
+        return worker
+
+    @on(Worker.StateChanged)
+    def on_history_worker_state_changed(self, event: Worker.StateChanged):
+        if event.worker is self._current_history_worker and event.state in (
+            WorkerState.CANCELLED, WorkerState.ERROR
+        ):
+            try:
+                self.query_one("#history-display-container").loading = False
+            except NoMatches:
+                pass
+
+    @work(exclusive=True, thread=True, group="fetch_historical_data")
+    def _fetch_historical_data(
+        self, ticker: str, period: str, interval: str = "1d", request_id: int = 0
+    ):
+        """Fetch history and preserve the originating selection in its result."""
+        if self._closing or get_current_worker().is_cancelled:
+            return
         try:
             data = market_provider.get_historical_data(ticker, period, interval)
-            if not get_current_worker().is_cancelled:
-                self.post_message(HistoricalDataUpdated(data))
+            if data is None:
+                raise ValueError("Historical data provider returned no result")
         except Exception as e:
             logging.error(
                 f"Worker fetch_historical_data failed for {ticker} over {period} with interval {interval}: {e}"
             )
+            data = pd.DataFrame()
+            data.attrs.update(error="Data Error", symbol=ticker)
+        if not self._closing and not get_current_worker().is_cancelled:
+            self.post_message(HistoricalDataUpdated(data, ticker, period, interval, request_id))
 
     @work(exclusive=True, thread=True, group="fetch_options_expirations")
     def fetch_options_expirations(self, ticker: str):
@@ -1952,7 +1993,15 @@ class StocksTUI(App):
 
     @on(HistoricalDataUpdated)
     async def on_historical_data_updated(self, message: HistoricalDataUpdated):
-        """Handles arrival of historical data, then tells the history view to render it."""
+        """Accept history only for the latest request and current selection."""
+        key = (message.ticker, message.period, message.interval)
+        if (
+            self._closing
+            or message.request_id != self._history_request_serial
+            or key != self._history_request_key
+            or key != (self.history_ticker, self._history_period, self._history_interval)
+        ):
+            return
         try:
             self.query_one("#history-display-container").loading = False
         except NoMatches:
