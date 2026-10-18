@@ -1,4 +1,6 @@
+from stockstui.data_validation import normalize_history_frame
 import pandas as pd
+import math
 import numpy as np
 from textual_plotext import PlotextPlot
 
@@ -16,7 +18,29 @@ class HistoryChart(PlotextPlot):
             *args, **kwargs: Arguments passed to the parent PlotextPlot class.
         """
         super().__init__(*args, **kwargs)
-        self._data = data
+        self._y_scale = 1.0
+        self._data = normalize_history_frame(data)
+        if not self._data.empty:
+            if pd.api.types.is_numeric_dtype(self._data.index.dtype):
+                self._data = self._data.iloc[:0]
+            else:
+                self._data.index = pd.to_datetime(self._data.index, errors="coerce", utc=True)
+                self._data = self._data.loc[~self._data.index.isna()].sort_index()
+                for column in dict.fromkeys(["Close", "Open", *(c for c in self._data.columns if c != "Volume")]):
+                    if column not in self._data:
+                        continue
+                    values = pd.to_numeric(self._data[column], errors="coerce")
+                    finite = np.isfinite(values.to_numpy(dtype=float, na_value=np.nan))
+                    if finite.any():
+                        self._data[column] = values
+                        self._data = self._data.loc[finite]
+                        if column not in ("Close", "Open"):
+                            self._data = self._data[[column]]
+                        elif column == "Open" and "Close" in self._data:
+                            self._data = self._data.drop(columns=["Close"])
+                        break
+                else:
+                    self._data = self._data.iloc[:0]
         self._period = period
 
     def on_mount(self) -> None:
@@ -41,6 +65,12 @@ class HistoryChart(PlotextPlot):
         else:
             return  # No data to plot
 
+        # Keep plotext's coordinate arithmetic finite, while labels retain prices.
+        magnitude = max(abs(float(value)) for value in y_data)
+        if magnitude > 1e100 or 0 < magnitude < 1e-100:
+            self._y_scale = magnitude
+        y_data = [float(value) / self._y_scale for value in y_data]
+
         # Get color from theme, defaulting to orange if not found
         line_color = self.app.theme_variables.get("orange", "orange")
         plt.plot(x_data, y_data, color=line_color)  # Plot the price history
@@ -49,7 +79,9 @@ class HistoryChart(PlotextPlot):
         self._set_price_ticks()  # Configure y-axis (price) ticks and labels
 
         plt.title("Price History")  # Set chart title
-        plt.ylabel("Price (USD)")  # Set y-axis label
+        currency = self._data.attrs.get("currency")
+        plt.ylabel(f"Price ({currency})" if isinstance(currency, str) and currency else "Price")
+        plt.xlabel("Time (UTC)")
         plt.grid(True, True)  # Enable grid lines for better readability
 
     def _get_nice_y_ticks(
@@ -67,36 +99,29 @@ class HistoryChart(PlotextPlot):
         Returns:
             A list of calculated tick values.
         """
+        if not math.isfinite(y_min) or not math.isfinite(y_max) or y_max < y_min:
+            return []
         y_range = y_max - y_min
-        if y_range == 0:
-            return [y_min]  # Handle cases with no range
-
-        # Calculate a rough step size
-        rough_step = y_range / (num_ticks - 1)
-
-        if rough_step == 0:  # Avoid division by zero if range is tiny
+        if y_range == 0 or num_ticks < 2:
             return [y_min]
-
-        # Determine the magnitude of the rough step
-        power = 10 ** -np.floor(np.log10(abs(rough_step)))
-        nice_rough_step = rough_step * power
-
-        # Define preferred multipliers for nice steps
-        nice_multipliers = [0.1, 0.2, 0.25, 0.5, 1, 2, 5, 10]
-        nice_step = rough_step
-        # Find the smallest 'nice' multiplier that is greater than or equal to the rough step
-        for mult in nice_multipliers:
-            if mult >= nice_rough_step:
-                nice_step = mult / power
-                break
-
-        # Calculate the tick values, starting from a "nice" number below y_min
-        start_tick = np.floor(y_min / nice_step) * nice_step
-        end_tick = np.ceil(y_max / nice_step) * nice_step
-
-        ticks = np.arange(start_tick, end_tick + nice_step, nice_step)
-
-        return list(ticks)
+        if not math.isfinite(y_range):
+            return [y_min, 0.0, y_max]
+        rough_step = y_range / (num_ticks - 1)
+        if rough_step == 0:
+            return [y_min]
+        magnitude = 10.0 ** math.floor(math.log10(rough_step))
+        if magnitude == 0:
+            return [y_min]
+        fraction = rough_step / magnitude
+        multiplier = next((n for n in (1, 2, 2.5, 5, 10) if n >= fraction), 10)
+        step = multiplier * magnitude
+        if not math.isfinite(step) or step <= 0:
+            return [y_min, y_max]
+        start = math.floor(y_min / step) * step
+        if not math.isfinite(start):
+            start = y_min
+        count = min(256, max(2, math.ceil((y_max - start) / step) + 1))
+        return [tick for i in range(count) if math.isfinite(tick := start + i * step)]
 
     def _set_price_ticks(self):
         """
@@ -119,32 +144,40 @@ class HistoryChart(PlotextPlot):
 
         y_min, y_max = self._data[price_column].min(), self._data[price_column].max()
 
-        if y_min is not None and y_max is not None and y_max >= y_min:
+        if y_min is not None and y_max is not None and math.isfinite(y_min) and math.isfinite(y_max) and y_max >= y_min:
             # Determine the number of ticks based on available vertical space.
             num_ticks = 4 if self.size.height < 15 else 6
 
             # First, calculate our own "nice" ticks.
             ticks = self._get_nice_y_ticks(y_min, y_max, num_ticks)
+            if len(ticks) == 1 and y_min < y_max:
+                # A tiny step may underflow; keep the full non-flat data range.
+                ticks = [y_min, y_max]
 
             # Create the corresponding labels, formatted as currency.
-            labels = [f"{tick:,.2f}" for tick in ticks]
+            labels = [self._price_label(tick) for tick in ticks]
+            positions = [float(tick) / self._y_scale for tick in ticks]
 
             # Then, set the y-axis limits to match our calculated ticks. This is the crucial step
             # to ensure plotext uses our custom ticks correctly.
             if ticks:
                 if len(ticks) > 1:
-                    plt.ylim(ticks[0], ticks[-1])
+                    plt.ylim(positions[0], positions[-1])
                 else:
                     # Handle single tick case (flat line) to avoid plotext error (division by zero)
-                    val = ticks[0]
+                    val = positions[0]
                     delta = abs(val) * 0.05 if val != 0 else 1.0
                     plt.ylim(val - delta, val + delta)
 
             # Finally, apply our calculated ticks and labels.
-            plt.yticks(ticks, labels)
-        elif y_min is not None:
+            plt.yticks(positions, labels)
+        elif y_min is not None and math.isfinite(y_min):
             # Fallback for single data point or flat line, just show the single price.
-            plt.yticks([y_min], [f"{y_min:,.2f}"])
+            plt.yticks([float(y_min) / self._y_scale], [self._price_label(y_min)])
+
+    def _price_label(self, price: float) -> str:
+        scientific = self._y_scale != 1.0 or 0 < abs(price) < 0.01 or abs(price) >= 1e9
+        return f"{price:.2e}" if scientific else f"{price:,.2f}"
 
     def _set_date_ticks(self):
         """
@@ -176,16 +209,17 @@ class HistoryChart(PlotextPlot):
         elif self._period == "1d":
             # Special handling for 1-day period to show hourly ticks
             hour_ticks = []
-            current_date = start_date.floor("H")  # Start from the beginning of the hour
+            current_date = start_date.floor("h")  # Start from the beginning of the hour
             if current_date < start_date:
                 current_date += pd.Timedelta(
                     hours=1
                 )  # Adjust if start_date is mid-hour
 
+            step_hours = max(2, math.ceil((end_date - current_date).total_seconds() / (3600 * 7)))
             while current_date <= end_date:
                 hour_ticks.append(current_date)
                 current_date += pd.Timedelta(
-                    hours=2
+                    hours=step_hours
                 )  # Use 2-hour increments for clarity
 
             # Downsample ticks if too many for display
@@ -201,6 +235,8 @@ class HistoryChart(PlotextPlot):
         if freq:
             ticks = pd.date_range(start=start_date, end=end_date, freq=freq).to_list()
 
+        if len(ticks) > 8:
+            ticks = ticks[::math.ceil(len(ticks) / 8)]
         if ticks:
             # Filter out ticks outside the actual data range just in case
             ticks = [t for t in ticks if start_date <= t <= end_date]

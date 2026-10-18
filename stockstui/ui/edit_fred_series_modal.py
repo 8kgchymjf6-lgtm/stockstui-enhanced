@@ -14,7 +14,7 @@ class EditFredSeriesModal(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(f"Edit Alias: {self.series_id}", classes="modal-header")
+            yield Label(f"Edit Alias: {self.series_id}", classes="modal-header", markup=False)
             yield Label("Alias:", classes="field-label")
             yield Input(
                 value=self.current_alias,

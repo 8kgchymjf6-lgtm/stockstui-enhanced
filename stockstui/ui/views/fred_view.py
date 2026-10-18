@@ -9,10 +9,12 @@ from textual.containers import Vertical
 from textual.widgets import Label, DataTable
 from textual.dom import NoMatches
 from textual.binding import Binding
-from textual import work
+from textual import work, on
+from textual.worker import Worker, WorkerState, get_current_worker
 from rich.text import Text
 import webbrowser
 import logging
+import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from stockstui.data_providers import fred_provider
@@ -59,6 +61,11 @@ class FredView(Vertical):
         # Actually bindings on the view are useful if focus is on the view container but not the table?
         # But for 'e' to work on a row, table must be focused.
     ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._load_serial = 0
+        self._load_worker: Worker | None = None
 
     def compose(self) -> ComposeResult:
         yield Label("Economic Data Summary", classes="content-header")
@@ -168,42 +175,58 @@ class FredView(Vertical):
         except NoMatches:
             logging.debug("FredDataTable not found for open operation")
 
-    @work(exclusive=True, thread=True)
     def load_all_series(self):
-        """Fetch summary data for all configured series."""
+        self._load_serial += 1
+        if self._load_worker is not None:
+            self._load_worker.cancel()
         settings = self.app.config.settings.get("fred_settings", {})
         api_key = settings.get("api_key")
-
+        series = tuple(settings.get("series_list", []))
         if not api_key:
-            self.app.call_from_thread(self._show_error)
+            self._show_error()
+            return None
+        if not series:
+            self._display_empty()
+            return None
+        self._set_loading(True)
+        worker = self._load_all_series(self._load_serial, api_key, series)
+        self._load_worker = worker
+        return worker
+
+    def _apply_loaded_series(self, serial: int, summaries: list):
+        if serial != self._load_serial or not self.is_mounted or getattr(self.app, "_closing", False):
             return
+        self._populate_table(summaries)
 
-        series_list = settings.get("series_list", [])
-        if not series_list:
-            self.app.call_from_thread(self._display_empty)
-            return
+    @on(Worker.StateChanged)
+    def on_load_worker_state_changed(self, event: Worker.StateChanged):
+        if event.worker is self._load_worker and event.state in (WorkerState.ERROR, WorkerState.CANCELLED):
+            self._set_loading(False)
 
-        self.app.call_from_thread(self._set_loading, True)
-
-        # Fetch FRED series summaries concurrently to avoid O(n * latency) blocking
-        max_workers = min(len(series_list), 4)
-        summaries: list[dict | None] = [None] * len(series_list)
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_index = {
-                executor.submit(fred_provider.get_series_summary, series_id, api_key): i
-                for i, series_id in enumerate(series_list)
-            }
+    @work(exclusive=True, thread=True, group="fred_summaries")
+    def _load_all_series(self, serial: int, api_key: str, series: tuple[str, ...]):
+        summaries: list[dict | None] = [None] * len(series)
+        worker = get_current_worker()
+        with ThreadPoolExecutor(max_workers=min(len(series), 4)) as executor:
+            future_to_index = {executor.submit(fred_provider.get_series_summary, series_id, api_key): i for i, series_id in enumerate(series)}
             for future in as_completed(future_to_index):
-                idx = future_to_index[future]
+                if worker.is_cancelled:
+                    for pending in future_to_index:
+                        pending.cancel()
+                    return
                 try:
-                    summaries[idx] = future.result()
-                except Exception as e:
-                    logging.error(f"Failed to fetch FRED series: {e}")
-
-        # Filter out any None values in case of fetch errors
-        summaries = [s for s in summaries if s is not None]
-
-        self.app.call_from_thread(self._populate_table, summaries)
+                    result = future.result()
+                    if isinstance(result, dict):
+                        summaries[future_to_index[future]] = result
+                except Exception:
+                    logging.error("Could not fetch a configured FRED series")
+        if worker.is_cancelled:
+            return
+        try:
+            self.app.call_from_thread(self._apply_loaded_series, serial, [s for s in summaries if s is not None])
+        except RuntimeError:
+            # The view or application may have closed while HTTP calls completed.
+            return
 
     def _set_loading(self, loading: bool):
         try:
@@ -247,7 +270,15 @@ class FredView(Vertical):
             aliases = settings.get("series_aliases", {})
 
             # Helper to format percentage values with color
+            def number(val):
+                try:
+                    result = float(val)
+                    return result if not isinstance(val, bool) and math.isfinite(result) else None
+                except (TypeError, ValueError, OverflowError):
+                    return None
+
             def format_pct(val, show_sign=True):
+                val = number(val)
                 if val is None:
                     return Text("N/A", justify="right", style=text_muted)
                 color = (
@@ -258,12 +289,14 @@ class FredView(Vertical):
 
             # Helper to format numeric values
             def format_num(val, decimals=2):
+                val = number(val)
                 if val is None:
                     return Text("N/A", justify="right", style=text_muted)
                 return Text(f"{val:,.{decimals}f}", justify="right")
 
             # Format Z-score with warning colors for extreme values
             def format_zscore(val):
+                val = number(val)
                 if val is None:
                     return Text("N/A", justify="right", style=text_muted)
                 # Extreme values (|z| > 2) get warning/error color
@@ -278,6 +311,7 @@ class FredView(Vertical):
 
             # Format % range with colors for extreme positions
             def format_pct_range(val):
+                val = number(val)
                 if val is None:
                     return Text("N/A", justify="right", style=text_muted)
                 # Near extremes get warning colors
@@ -289,30 +323,36 @@ class FredView(Vertical):
                     color = ""
                 return Text(f"{val:.0f}%", style=color, justify="right")
 
+            seen = set()
             for item in summaries:
+                if not isinstance(item, dict):
+                    continue
                 series_id = item.get("id")
+                if not isinstance(series_id, str) or not series_id or series_id in seen:
+                    continue
+                seen.add(series_id)
                 alias = aliases.get(series_id)
 
                 # Format Name/Title
                 if alias:
                     name_text = Text(alias)
                 else:
-                    name_text = Text(item.get("title", series_id))
+                    name_text = Text(str(item.get("title") or series_id))
 
                 # Format Current Value
-                current_val = item.get("current")
+                current_val = number(item.get("current"))
                 if isinstance(current_val, (int, float)):
                     current_text = Text(f"{current_val:,.2f}", justify="right")
                 else:
                     current_text = Text(
-                        str(current_val), justify="right", style=text_muted
+                        "N/A", justify="right", style=text_muted
                     )
 
                 # Format date
-                date_text = Text(item.get("date", "N/A"), justify="center")
+                date_text = Text(str(item.get("date") or "N/A"), justify="center")
 
                 # Format frequency
-                freq_text = Text(item.get("frequency", "M"), justify="center")
+                freq_text = Text(str(item.get("frequency") or "N/A"), justify="center")
 
                 table.add_row(
                     name_text,
@@ -327,7 +367,7 @@ class FredView(Vertical):
                     date_text,
                     freq_text,
                     Text(
-                        item.get("units_short") or item.get("units", ""), justify="left"
+                        str(item.get("units_short") or item.get("units") or ""), justify="left"
                     ),
                     key=series_id,
                 )

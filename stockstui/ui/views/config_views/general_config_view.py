@@ -105,7 +105,7 @@ class GeneralConfigView(Vertical):
             for tab in unique_tabs:
                 visible = tab not in hidden_tabs
                 item_content = Horizontal(
-                    Label(tab.replace("_", " ").capitalize(), classes="column-label"),
+                    Label(tab.replace("_", " ").capitalize(), classes="column-label", markup=False),
                     Switch(value=visible, classes="tab-switch"),
                     classes="column-item-layout",
                 )

@@ -1,3 +1,4 @@
+from stockstui.data_validation import finite_number, normalize_price_row, normalize_history_frame
 from typing import Union
 from datetime import datetime
 from dateutil.tz import gettz
@@ -22,7 +23,8 @@ CURRENCY_SYMBOLS = {
 def format_market_cap(value):
     """Format market cap as T/B/M/K."""
 
-    if not isinstance(value, (int, float)):
+    value = finite_number(value)
+    if value is None:
         return "N/A"
 
     abs_value = abs(value)
@@ -44,7 +46,7 @@ def format_market_cap(value):
 
 def get_currency_symbol(currency_code: str | None) -> str:
     """Resolves standard currency codes to their local symbols, default to $."""
-    if not currency_code:
+    if not isinstance(currency_code, str) or not currency_code:
         return "$"
     return CURRENCY_SYMBOLS.get(currency_code.upper(), "$")
 
@@ -69,20 +71,23 @@ def format_price_data_for_table(
         A list of tuples, where each tuple represents a row for the DataTable.
     """
     rows = []
-    for item in data:
+    for raw in data:
+        item = normalize_price_row(raw)
+        if item is None:
+            continue
         symbol = item.get("symbol", "N/A")
         # Prioritize the user-defined alias, fall back to the long name from the provider.
-        description = alias_map.get(symbol, item.get("description", "N/A"))
+        description = str(alias_map.get(symbol) or item.get("description") or symbol)
         price = item.get("price")
         previous_close = item.get("previous_close")
 
         change, change_percent, change_direction = None, None, None
         if price is not None and previous_close is not None and previous_close != 0:
-            change = price - previous_close
-            change_percent = change / previous_close
+            change = finite_number(price - previous_close)
+            change_percent = finite_number((price - previous_close) / previous_close)
 
         # Determine change direction for flashing based on the *old* price
-        old_price = old_prices.get(symbol)
+        old_price = finite_number(old_prices.get(symbol))
         if old_price is not None and price is not None:
             if round(price, 2) > round(old_price, 2):
                 change_direction = "up"
@@ -156,7 +161,9 @@ def format_price_data_for_table(
         all_time_high = item.get("all_time_high")
         pct_off_ath = None
         if price is not None and all_time_high is not None and all_time_high != 0:
-            pct_off_ath = (price / all_time_high) - 1
+            pct_off_ath = finite_number((price / all_time_high) - 1)
+        dividend_yield = item.get("dividend_yield")
+        dividend_percent = finite_number(dividend_yield * 100) if dividend_yield is not None else None
 
         # Return a dictionary so columns can be selected dynamically
         rows.append(
@@ -171,20 +178,19 @@ def format_price_data_for_table(
                 "Volume": volume_str,
                 "Open": open_str,
                 "Prev Close": prev_close_str,
-        "PE Ratio": (
+                "PE Ratio": (
                     f"{item['pe_ratio']:.1f}"
                     if isinstance(item.get("pe_ratio"), (int, float))
                     else "N/A"
-                    ),
+                ),
                 "Market Cap": format_market_cap(item.get("market_cap")),
                 "Div Yield": (
-                    f"{item['dividend_yield'] * 100:.1f}%"
-                    if isinstance(item.get("dividend_yield"), (int, float))
-                    and item["dividend_yield"] > 0
+                    f"{dividend_percent:.1f}%"
+                    if dividend_percent is not None and dividend_percent > 0
                     else "N/A"
-                    ),
-                "EPS": f"{item.get('eps', 0):.2f}" if item.get("eps") else "N/A",
-                "Beta": f"{item.get('beta', 0):.2f}" if item.get("beta") else "N/A",
+                ),
+                "EPS": f"{item['eps']:.2f}" if item.get("eps") is not None else "N/A",
+                "Beta": f"{item['beta']:.2f}" if item.get("beta") is not None else "N/A",
                 "All Time High": all_time_high,
                 "% Off ATH": pct_off_ath,
                 "_change_direction": change_direction,  # Internal use
@@ -212,11 +218,15 @@ def format_historical_data_as_table(data):
     Returns:
         A Textual DataTable widget ready for display.
     """
+    data = normalize_history_frame(data)
+    for column in ("Open", "High", "Low", "Close", "Volume"):
+        if column not in data:
+            data[column] = float("nan")
     table = NavigableDataTable(zebra_stripes=True, id="history-table")
 
     # Check if the data is intraday by seeing if all timestamps are at midnight.
     # If not, it's intraday data.
-    is_intraday = not (data.index.normalize() == data.index).all()
+    is_intraday = hasattr(data.index, "normalize") and not (data.index.normalize() == data.index).all()
 
     if is_intraday:
         table.add_column("Timestamp", key="Date")
@@ -235,24 +245,16 @@ def format_historical_data_as_table(data):
     currency_code = data.attrs.get("currency", "USD") if hasattr(data, "attrs") else "USD"
     sym = get_currency_symbol(currency_code)
 
-    # Extract NumPy arrays once to avoid per-row Series boxing overhead of iterrows()
-    opens  = data["Open"].values
-    highs  = data["High"].values
-    lows   = data["Low"].values
-    closes = data["Close"].values
-    vols   = data["Volume"].values
+    if not hasattr(data.index, "normalize"):
+        return table
+    def price(value):
+        number = finite_number(value)
+        return f"{sym}{number:,.2f}" if number is not None else "N/A"
+    for idx, row in zip(data.index, data[["Open","High","Low","Close","Volume"]].itertuples(index=False,name=None)):
+        open_, high, low, close, volume = row
+        volume = finite_number(volume)
+        table.add_row(idx.strftime(date_format),price(open_),price(high),price(low),price(close),f"{int(volume):,}" if volume is not None else "N/A")
 
-    for idx, open_, high, low, close, vol in zip(
-        data.index, opens, highs, lows, closes, vols
-    ):
-        table.add_row(
-            idx.strftime(date_format),
-            f"{sym}{open_:,.2f}",
-            f"{sym}{high:,.2f}",
-            f"{sym}{low:,.2f}",
-            f"{sym}{close:,.2f}",
-            f"{int(vol):,}",
-        )
     return table
 
 
@@ -400,24 +402,26 @@ def format_news_for_display(news: list[dict]) -> tuple[Union[str, Text], list[st
         if source_ticker:
             text += f"Source: **`{source_ticker}`**\n"
 
-        title_raw = item.get("title", "N/A")
+        title_raw = str(item.get("title") or "N/A")
         title = escape(title_raw)
-        link = item.get("link", "#")
+        link = item.get("link")
+        if not isinstance(link, str) or not link.startswith(("https://", "http://")):
+            link = None
 
-        publisher_raw = item.get("publisher", "N/A")
+        publisher_raw = str(item.get("publisher") or "N/A")
         publisher = escape(publisher_raw)
 
-        publish_time_raw = item.get("publish_time", "N/A")
+        publish_time_raw = str(item.get("publish_time") or "N/A")
         publish_time = escape(publish_time_raw)
 
-        summary_raw = item.get("summary", "N/A")
+        summary_raw = str(item.get("summary") or "N/A")
         summary = escape(summary_raw)
 
-        if title_raw != "N/A":
+        if title_raw != "N/A" and link:
             text += f"**[{title}]({link})**\n\n"
             urls.append(link)
         else:
-            text += f"**[dim]{title}[/dim]**\n\n"
+            text += f"**{title}**\n\n"
 
         publisher_display = (
             publisher if publisher_raw != "N/A" else f"[dim]{publisher}[/dim]"

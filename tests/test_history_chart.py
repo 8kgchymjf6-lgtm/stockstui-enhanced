@@ -168,6 +168,7 @@ class TestHistoryChart(unittest.IsolatedAsyncioTestCase):
             plt.reset_mock()
 
             # A single calculated tick requires expanded y-axis limits.
+            series.max.return_value = 10.0
             with patch.object(chart, "_get_nice_y_ticks", return_value=[10.0]):
                 chart._set_price_ticks()
 

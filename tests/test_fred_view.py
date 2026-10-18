@@ -470,85 +470,26 @@ class TestFredView(unittest.IsolatedAsyncioTestCase):
             view.action_edit_series()
 
     def test_load_all_series_handles_missing_configuration(self):
-        """Missing API keys and empty series lists should show helpful states."""
         view = FredView()
         app = MagicMock()
-
-        load_function = FredView.load_all_series.__wrapped__
-
         app.config.settings = {"fred_settings": {}}
-
-        with patch.object(
-            type(view),
-            "app",
-            new_callable=PropertyMock,
-            return_value=app,
-        ):
-            load_function(view)
-
-        app.call_from_thread.assert_called_once_with(view._show_error)
-
-        app.call_from_thread.reset_mock()
-        app.config.settings = {
-            "fred_settings": {
-                "api_key": "fake-key",
-                "series_list": [],
-            }
-        }
-
-        with patch.object(
-            type(view),
-            "app",
-            new_callable=PropertyMock,
-            return_value=app,
-        ):
-            load_function(view)
-
-        app.call_from_thread.assert_called_once_with(view._display_empty)
+        with patch.object(type(view), "app", new_callable=PropertyMock, return_value=app), patch.object(view,"_show_error") as error, patch.object(view,"_display_empty") as empty:
+            self.assertIsNone(view.load_all_series())
+            error.assert_called_once()
+            app.config.settings = {"fred_settings":{"api_key":"fake-key","series_list":[]}}
+            self.assertIsNone(view.load_all_series())
+            empty.assert_called_once()
 
     def test_load_all_series_filters_failed_requests(self):
-        """A failed series request should not discard successful summaries."""
         view = FredView()
         app = MagicMock()
-        app.config.settings = {
-            "fred_settings": {
-                "api_key": "fake-key",
-                "series_list": ["GOOD", "BAD"],
-            }
-        }
-
-        good_summary = {
-            "id": "GOOD",
-            "title": "Successful series",
-        }
-
+        good_summary = {"id":"GOOD","title":"Successful series"}
         def get_summary(series_id, api_key):
-            if series_id == "BAD":
-                raise RuntimeError("FRED request failed")
+            if series_id == "BAD": raise RuntimeError("FRED request failed")
             return good_summary
-
-        load_function = FredView.load_all_series.__wrapped__
-
-        with (
-            patch.object(
-                type(view),
-                "app",
-                new_callable=PropertyMock,
-                return_value=app,
-            ),
-            patch(
-                "stockstui.ui.views.fred_view.fred_provider.get_series_summary",
-                side_effect=get_summary,
-            ),
-        ):
-            load_function(view)
-
-        self.assertEqual(app.call_from_thread.call_count, 2)
-        app.call_from_thread.assert_any_call(view._set_loading, True)
-        app.call_from_thread.assert_any_call(
-            view._populate_table,
-            [good_summary],
-        )
+        with patch.object(type(view),"app",new_callable=PropertyMock,return_value=app), patch("stockstui.ui.views.fred_view.fred_provider.get_series_summary",side_effect=get_summary), patch("stockstui.ui.views.fred_view.get_current_worker",return_value=MagicMock(is_cancelled=False)):
+            FredView._load_all_series.__wrapped__(view,1,"fake-key",("GOOD","BAD"))
+        app.call_from_thread.assert_called_once_with(view._apply_loaded_series,1,[good_summary])
 
     def test_error_and_empty_messages_update_table(self):
         """Error and empty states should clear and update the table."""

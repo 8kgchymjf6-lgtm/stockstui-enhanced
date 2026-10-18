@@ -40,6 +40,8 @@ def calculate_greeks(
         Dictionary containing 'delta', 'gamma', 'theta', 'vega', 'rho'
     """
     try:
+        if not all(math.isfinite(value) for value in (S, K, T, r, sigma, q)):
+            return {}
         if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
             return {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0, "rho": 0.0}
 

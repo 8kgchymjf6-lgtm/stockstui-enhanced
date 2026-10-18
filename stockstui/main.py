@@ -18,7 +18,7 @@ import pandas as pd
 import yfinance as yf
 from rich.console import Console
 from rich.table import Table
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, ScreenStackError
 from textual.binding import Binding
 from textual.actions import SkipAction
 from textual.containers import Container, Horizontal, Vertical
@@ -31,6 +31,7 @@ from textual.widgets import (
     Footer,
     Input,
     Label,
+    Markdown,
     Select,
     Tab,
     Tabs,
@@ -49,6 +50,7 @@ from textual.color import Color
 from platformdirs import PlatformDirs
 
 from stockstui.quote_status import status_display, summarize_quotes
+from stockstui.data_validation import normalize_price_row
 from stockstui.config_manager import ConfigManager, ConfigSaveError
 from stockstui.common import (
     PriceDataUpdated,
@@ -224,6 +226,10 @@ class StocksTUI(App):
         self._history_request_key: tuple[str, str, str] | None = None
         self._current_history_worker: Worker | None = None
         self._history_interval = "1d"
+        self._market_status_serial = 0
+        self._news_request_serial = 0
+        self._current_news_worker: Worker | None = None
+        self._news_request_tickers: str | None = None
         self._options_request_serial = 0
         self._options_request_key: tuple[str, str] | None = None
         self._current_options_worker: Worker | None = None
@@ -805,7 +811,7 @@ class StocksTUI(App):
             # Safety check: ensure no residual widget exists with this ID
             if tabs_widget.query(f"#{tab_id}"):
                 await tabs_widget.query(f"#{tab_id}").remove()
-            await tabs_widget.add_tab(Tab(f"{i}: {tab_data['name']}", id=tab_id))
+            await tabs_widget.add_tab(Tab(Text(f"{i}: {tab_data['name']}"), id=tab_id))
         self._update_tab_bindings()
 
         try:
@@ -856,7 +862,7 @@ class StocksTUI(App):
             try:
                 default_tab_select = general_view.query_one("#default-tab-select", Select)
                 options = [
-                    (t["name"], t["category"])
+                    (Text(t["name"]), t["category"])
                     for t in self.tab_map
                     if t["category"] not in ["configs", "history", "news", "debug"]
                 ]
@@ -993,6 +999,31 @@ class StocksTUI(App):
         Refreshes price data for the current view.
         """
         category = self.get_active_category()
+        try:
+            if category == "news":
+                if self.news_ticker:
+                    self.query_one(NewsView).query_one(Markdown).loading = True
+                    self.fetch_news(self.news_ticker, force=force)
+                return
+            if category == "history":
+                self.query_one(HistoryView)._request_historical_data()
+                return
+            if category == "options":
+                if force and self.options_ticker:
+                    options_provider.clear_options_cache(self.options_ticker)
+                view = self.query_one(OptionsView)
+                if view.expirations:
+                    view._request_options_chain()
+                else:
+                    view._request_expirations()
+                return
+            if category == "fred":
+                if force:
+                    fred_provider.clear_cache(self.config.settings.get("fred_settings", {}).get("series_list", []))
+                self.query_one(FredView).load_all_series()
+                return
+        except (NoMatches, ScreenStackError):
+            return
         if category and category not in [
             "history",
             "news",
@@ -1336,7 +1367,7 @@ class StocksTUI(App):
             else:
                 price_table.loading = False
                 price_table.add_row(
-                    f"[dim]No symbols in list '{category}'. Add some in the Configs tab.[/dim]"
+                    Text(f"No symbols in list '{category}'. Add some in the Configs tab.", style="dim")
                 )
                 self._refresh_search_snapshot(price_table)
 
@@ -1383,33 +1414,56 @@ class StocksTUI(App):
             if not get_current_worker().is_cancelled:
                 self.post_message(PriceDataUpdated([], category, request_id=request_id, error=str(e)))
 
-    @work(exclusive=True, thread=True, group="fetch_market_status")
     def fetch_market_status(self, calendar: str):
+        if self._closing:
+            return None
+        self._market_status_serial += 1
+        return self._fetch_market_status(calendar, self._market_status_serial)
+
+    @work(exclusive=True, thread=True, group="fetch_market_status")
+    def _fetch_market_status(self, calendar: str, request_id: int = 0):
         """Worker to fetch the current market status."""
         try:
             status = market_provider.get_market_status(calendar)
-            if not get_current_worker().is_cancelled:
-                self.post_message(MarketStatusUpdated(status))
+            if not self._closing and not get_current_worker().is_cancelled:
+                self.post_message(MarketStatusUpdated(status, calendar, request_id))
         except Exception as e:
             logging.error(f"Market status worker failed: {e}")
 
+    def cancel_news_request(self):
+        self._news_request_serial += 1
+        self._news_request_tickers = None
+        if self._current_news_worker is not None:
+            self._current_news_worker.cancel()
+
+    def fetch_news(self, tickers_str: str, force: bool = False):
+        if self._closing:
+            return None
+        self._news_request_serial += 1
+        self._news_request_tickers = tickers_str
+        worker = self._fetch_news(tickers_str, self._news_request_serial, force)
+        self._current_news_worker = worker
+        return worker
+
+    @on(Worker.StateChanged)
+    def on_news_worker_state_changed(self, event: Worker.StateChanged):
+        if self._closing or event.worker is not self._current_news_worker:
+            return
+        if event.state in (WorkerState.ERROR, WorkerState.CANCELLED):
+            self.post_message(NewsDataUpdated(self._news_request_tickers or "", None, self._news_request_serial))
+
     @work(exclusive=True, thread=True, group="fetch_news")
-    def fetch_news(self, tickers_str: str):
-        """Worker to fetch news data for one or more tickers."""
+    def _fetch_news(self, tickers_str: str, request_id: int, force: bool = False):
         try:
             tickers = [t.strip().upper() for t in tickers_str.split(",") if t.strip()]
-            if not tickers:
-                if not get_current_worker().is_cancelled:
-                    self.post_message(NewsDataUpdated(tickers_str, []))
-                return
-
-            data = market_provider.get_news_for_tickers(tickers)
-            if not get_current_worker().is_cancelled:
-                self.post_message(NewsDataUpdated(tickers_str, data))
-        except Exception as e:
-            logging.error(f"Worker fetch_news failed for {tickers_str}: {e}")
-            if not get_current_worker().is_cancelled:
-                self.post_message(NewsDataUpdated(tickers_str, None))
+            worker = get_current_worker()
+            cancelled = lambda: worker.is_cancelled or self._closing
+            data = market_provider.get_news_for_tickers(tickers, force_refresh=force, cancelled=cancelled) if tickers else []
+        except Exception:
+            logging.error("News worker failed for %s", tickers_str)
+            data = None
+        if not self._closing and not get_current_worker().is_cancelled:
+            self.post_message(NewsDataUpdated(tickers_str, data, request_id))
 
     def fetch_historical_data(self, ticker: str, period: str, interval: str = "1d"):
         """Assign a generation on the UI thread before starting a history worker."""
@@ -1953,7 +2007,11 @@ class StocksTUI(App):
             else:
                 ordered_filtered_symbols = symbols_on_screen
 
-            data_map = {item["symbol"]: item for item in message.data}
+            data_map = {}
+            for item in message.data:
+                row = normalize_price_row(item)
+                if row is not None and isinstance(row.get("symbol"), str):
+                    data_map[row["symbol"]] = row
 
             data_for_table = [
                 data_map[symbol]
@@ -1970,7 +2028,7 @@ class StocksTUI(App):
                     dt.add_row("[dim]No symbols match the current tag filter.[/dim]")
                 else:
                     dt.add_row(
-                        f"[dim]No symbols in list '{active_category}'. Add some in the Configs tab.[/dim]"
+                        Text(f"No symbols in list '{active_category}'. Add some in the Configs tab.", style="dim")
                     )
                 self._refresh_search_snapshot(dt)
                 self._show_quote_status(self._quote_status([]), [])
@@ -2039,6 +2097,12 @@ class StocksTUI(App):
     @on(MarketStatusUpdated)
     async def on_market_status_updated(self, message: MarketStatusUpdated):
         """Handles the arrival of new market status data from a worker."""
+        if self._closing:
+            return
+        if message.calendar is not None and message.calendar != self.config.get_setting("market_calendar", "NYSE"):
+            return
+        if message.request_id is not None and message.request_id != self._market_status_serial:
+            return
         self._update_market_status_display(message.status)
 
     @on(HistoricalDataUpdated)
@@ -2114,6 +2178,13 @@ class StocksTUI(App):
     @on(NewsDataUpdated)
     async def on_news_data_updated(self, message: NewsDataUpdated):
         """Handles arrival of news data, then tells the news view to render it."""
+        if self._closing or self.news_ticker != message.tickers_str:
+            return
+        if message.request_id is not None and (
+            message.request_id != self._news_request_serial
+            or message.tickers_str != self._news_request_tickers
+        ):
+            return
         self._news_content_for_ticker = message.tickers_str
         if message.data is None:
             error_markdown = (
@@ -2122,7 +2193,10 @@ class StocksTUI(App):
             )
             self._last_news_content = (error_markdown, [])
         else:
-            self._last_news_content = formatter.format_news_for_display(message.data)
+            try:
+                self._last_news_content = formatter.format_news_for_display(message.data)
+            except (TypeError, ValueError, AttributeError):
+                self._last_news_content = ("Could not display the news response. Please refresh to retry.", [])
 
         if (
             self.get_active_category() == "news"
@@ -3356,6 +3430,12 @@ def run_cli_output(args: argparse.Namespace):
 
 def main():
     """The main entry point for the application."""
+    parser = create_arg_parser()
+    args = parser.parse_args()
+    if args.man:
+        show_manual()
+        return
+
     dirs = PlatformDirs("stockstui", "andriy-git")
 
     cache_dir = Path(dirs.user_cache_dir)
@@ -3369,13 +3449,6 @@ def main():
         filemode="w",
     )
 
-    parser = create_arg_parser()
-    args = parser.parse_args()
-
-    if args.man:
-        show_manual()
-        return
-
     if args.output:
         run_cli_output(args)
     else:
@@ -3385,7 +3458,11 @@ def main():
         formatter = logging.Formatter("%(message)s")
         textual_handler.setFormatter(formatter)
         logging.getLogger().addHandler(textual_handler)
-        app.run()
+        try:
+            app.run()
+        finally:
+            logging.getLogger().removeHandler(textual_handler)
+            textual_handler.close()
 
 
 if __name__ == "__main__":

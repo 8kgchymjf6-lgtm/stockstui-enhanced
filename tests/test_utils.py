@@ -199,8 +199,9 @@ class TestUtils(unittest.TestCase):
         result = merge_price_data(existing, new_data)
 
         self.assertEqual(result["all_time_high"], 150.0)
-        self.assertEqual(result["price"], "invalid")
-        self.assertIs(result["day_high"], new_data["day_high"])
+        self.assertEqual(result["price"], 100.0)
+        self.assertNotIn("day_high", result)
+        self.assertTrue(result["_fetch_failed"])
         self.assertNotIn("fifty_two_week_high", result)
 
     def test_merge_price_data_raises_high_from_price_fields(self):
@@ -272,7 +273,7 @@ class TestUtils(unittest.TestCase):
 
         result = merge_price_data(existing, {})
 
-        self.assertEqual(result["all_time_high"], "invalid")
+        self.assertIsNone(result["all_time_high"])
         self.assertEqual(result["price"], 100.0)
 
     def test_match_tags(self):

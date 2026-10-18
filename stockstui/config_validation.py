@@ -5,6 +5,7 @@ file from saving, and retains a byte-for-byte recovery copy when possible.
 """
 
 from copy import deepcopy
+from stockstui.utils import RESERVED_LIST_NAMES
 import math
 from textual.color import Color, ColorParseError
 
@@ -167,6 +168,8 @@ def validate_config(filename: str, value, defaults: dict) -> tuple[dict, list[st
             if (
                 not isinstance(name, str)
                 or not name.strip()
+                or name in RESERVED_LIST_NAMES
+                or not name.isprintable()
                 or not isinstance(items, list)
             ):
                 issues.append("invalid watchlist")

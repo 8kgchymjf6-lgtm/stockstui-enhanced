@@ -1133,7 +1133,7 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
         price_table.add_column.assert_any_call("Ticker", key="Ticker")
         price_table.add_column.assert_any_call("Price", key="Price")
         price_table.add_row.assert_called_once_with(
-            "[dim]No symbols in list 'empty'. Add some in the Configs tab.[/dim]"
+            Text("No symbols in list 'empty'. Add some in the Configs tab.", style="dim")
         )
         app.fetch_prices.assert_not_called()
 
@@ -1197,7 +1197,7 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
         worker = MagicMock()
         worker.is_cancelled = False
 
-        method = StocksTUI.fetch_market_status.__wrapped__
+        method = StocksTUI._fetch_market_status.__wrapped__
 
         with (
             patch(
@@ -1241,10 +1241,10 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
         worker = MagicMock()
         worker.is_cancelled = False
 
-        method = StocksTUI.fetch_news.__wrapped__
+        method = StocksTUI._fetch_news.__wrapped__
 
         with patch("stockstui.main.get_current_worker", return_value=worker):
-            method(app, " , ")
+            method(app, " , ", 0)
 
         app.post_message.assert_called_once()
 
@@ -1257,9 +1257,11 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
             ) as provider,
             patch("stockstui.main.get_current_worker", return_value=worker),
         ):
-            method(app, "aapl, msft")
+            method(app, "aapl, msft", 0)
 
-        provider.assert_called_once_with(["AAPL", "MSFT"])
+        self.assertEqual(provider.call_args.args, (["AAPL", "MSFT"],))
+        self.assertFalse(provider.call_args.kwargs["force_refresh"])
+        self.assertFalse(provider.call_args.kwargs["cancelled"]())
         app.post_message.assert_called_once()
 
         app.post_message.reset_mock()
@@ -1272,7 +1274,7 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
             patch("stockstui.main.get_current_worker", return_value=worker),
             patch("stockstui.main.logging.error") as log_error,
         ):
-            method(app, "AAPL")
+            method(app, "AAPL", 0)
 
         log_error.assert_called_once()
         app.post_message.assert_called_once()
@@ -1287,7 +1289,7 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
             ),
             patch("stockstui.main.get_current_worker", return_value=worker),
         ):
-            method(app, "AAPL")
+            method(app, "AAPL", 0)
 
         app.post_message.assert_not_called()
 
@@ -1733,6 +1735,8 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
         app._update_market_status_display = MagicMock()
         message = MagicMock()
         message.status = {"status": "open"}
+        message.calendar = None
+        message.request_id = None
 
         await app.on_market_status_updated(message)
 
@@ -1902,6 +1906,8 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
 
         message = MagicMock()
         message.tickers_str = "AAPL"
+        message.request_id = None
+        app.news_ticker = "AAPL"
         message.data = [{"title": "News"}]
 
         news_view = MagicMock()

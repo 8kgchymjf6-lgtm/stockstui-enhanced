@@ -77,7 +77,8 @@ class NewsView(Vertical):
 
     def _parse_tickers_from_input(self, value: str) -> str:
         """Cleans and standardizes a comma-separated string of tickers."""
-        tickers = [t.strip().upper() for t in value.split(",") if t.strip()]
+        tickers = [t.strip().split(" - ", 1)[0].upper() for t in value.split(",") if t.strip()]
+        tickers = list(dict.fromkeys(t for t in tickers if t))
         return ",".join(tickers)
 
     def _reset_link_focus(self):
@@ -94,13 +95,13 @@ class NewsView(Vertical):
         self.app._last_news_content = None
         self.app._news_content_for_ticker = None
 
-        if event.value:
-            markdown_widget = self.query_one(Markdown)
-            # Standardize the input string before using it.
-            tickers_str = self._parse_tickers_from_input(event.value)
-            self.app.news_ticker = tickers_str
-            markdown_widget.update("")
-            markdown_widget.loading = True
+        markdown_widget = self.query_one(Markdown)
+        self.app.cancel_news_request()
+        tickers_str = self._parse_tickers_from_input(event.value)
+        self.app.news_ticker = tickers_str or None
+        markdown_widget.update("")
+        markdown_widget.loading = bool(tickers_str)
+        if tickers_str:
             self.app.fetch_news(tickers_str)
 
     def update_content(self, markdown: Union[str, Text], urls: list[str]) -> None:

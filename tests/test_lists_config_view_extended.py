@@ -71,6 +71,7 @@ class ListsConfigViewTestApp(App):
         )
         self.config.save_lists = MagicMock()
         self.config.save_settings = MagicMock()
+        self.config.save_lists_and_settings = MagicMock(side_effect=lambda: (self.config.save_lists(), self.config.save_settings()))
         self.notify = MagicMock()
         self._rebuild_app = AsyncMock()
         self._rebuild_visible_columns = MagicMock()
@@ -948,10 +949,9 @@ class TestListsConfigView(unittest.IsolatedAsyncioTestCase):
                 type(modal).__name__,
                 "ConfirmDeleteModal",
             )
-            self.assertEqual(
-                callback,
-                view.on_delete_list_confirmed,
-            )
+            self.assertTrue(callable(callback))
+            await callback(False)
+            app.config.save_lists.assert_not_called()
 
     async def test_delete_list_confirmation_updates_related_settings(self):
         """Deleting a configured list should clean related settings."""

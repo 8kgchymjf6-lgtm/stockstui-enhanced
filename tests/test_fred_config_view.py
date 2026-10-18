@@ -55,7 +55,7 @@ class TestFredConfigView(unittest.IsolatedAsyncioTestCase):
 
             # Check row 1
             row1 = table.get_row("TEST1")
-            self.assertEqual(row1[0], "TEST1")
+            self.assertEqual(str(row1[0]), "TEST1")
             self.assertIn("Alias1", str(row1[1]))
 
     async def test_save_api_key(self):

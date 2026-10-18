@@ -13,6 +13,7 @@ from stockstui.ui.suggesters import TickerSuggester
 from stockstui.ui.widgets.history_chart import HistoryChart
 from stockstui.ui.widgets.vim_radio_set import VimRadioSet
 from stockstui.presentation import formatter
+from stockstui.data_validation import normalize_history_frame
 
 
 class HistoryView(Vertical):
@@ -116,6 +117,10 @@ class HistoryView(Vertical):
                 )
                 return
 
+            original = last_data
+            last_data = normalize_history_frame(last_data)
+            if not original.empty and last_data.empty:
+                last_data.attrs["error"] = "Data Error"
             if last_data.empty:
                 # Check for a specific error message from the data provider
                 error_type = last_data.attrs.get("error")

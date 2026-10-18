@@ -8,7 +8,8 @@ from copy import deepcopy
 from threading import RLock
 import pandas as pd
 from stockstui.utils import merge_price_data
-from stockstui.quote_time import quote_time_fields, replace_quote_time
+from stockstui.data_validation import finite_number, normalize_price_row, PRICE_NUMBERS
+from stockstui.quote_time import quote_time_fields, replace_quote_time, parse_quote_time
 
 
 # In-memory cache for storing fetched market data to reduce API calls.
@@ -18,6 +19,7 @@ _info_cache: dict[str, dict[str, Any]] = {}
 _market_calendars: dict[str, Any] = {}
 
 _cache_lock = RLock()
+_news_versions: dict[str, object] = {}
 
 
 def _store_price(ticker, entry):
@@ -206,6 +208,7 @@ def get_market_price_data(
     if prepost_data_to_fetch:
         live_prices.update(_fetch_fast_data(prepost_data_to_fetch, prepost=True))
 
+    live_prices = {ticker: row for ticker, value in live_prices.items() if (row := normalize_price_row(value)) is not None}
     # Merge live price updates back into the cache to maintain a single source of truth.
     # This prevents data loss when switching tabs mid-session.
     if live_prices:
@@ -220,7 +223,7 @@ def get_market_price_data(
                     merged["_fetch_failed"] = False
                     _price_cache[ticker]["fetch_failed"] = False
                 if merged.get("shares") and merged.get("price"):
-                    merged["market_cap"] = merged["shares"] * merged["price"]
+                    merged["market_cap"] = finite_number(merged["shares"] * merged["price"])
                 _price_cache[ticker]["data"] = merged
 
     # Return copies: a renderer or a shutdown save must never iterate live caches.
@@ -236,7 +239,9 @@ def get_market_price_data(
     for ticker in valid_tickers:
         entry = snapshot.get(ticker)
         if entry is not None:
-            row = entry.get("data", {}).copy()
+            row = normalize_price_row(entry.get("data"), ticker)
+            if row is None:
+                continue
             row["_stale"] = bool(
                 entry.get("fetch_failed")
                 or row.get("_fetch_failed")
@@ -319,10 +324,13 @@ def _fetch_and_cache_slow_data(tickers: list[str]):
                 if not shares:
                     shares = si.get("sharesOutstanding") or si.get("floatShares")
 
+                shares = finite_number(shares)
                 # Use a paired regular-market price/time when available. FastInfo's
                 # lastPrice can come from a daily bar and has no matching trade time.
-                regular_price = si.get("regularMarketPrice")
-                price = regular_price or fi.get("lastPrice") or si.get("currentPrice")
+                regular_price = finite_number(si.get("regularMarketPrice"))
+                price = regular_price if regular_price is not None else finite_number(fi.get("lastPrice"))
+                if price is None:
+                    price = finite_number(si.get("currentPrice"))
                 price_time = quote_time_fields(
                     si.get("regularMarketTime") if regular_price else None, "quote"
                 )
@@ -364,9 +372,23 @@ def _fetch_and_cache_slow_data(tickers: list[str]):
                     "all_time_high": si.get("allTimeHigh"),
                 }
 
+                new_data = normalize_price_row(new_data, ticker) or {"symbol": ticker}
+                split_at = finite_number(si.get("lastSplitDate"))
+                if split_at is not None:
+                    new_data["_last_split_at"] = split_at
                 existing_entry = _price_entry(ticker)
                 if existing_entry and "data" in existing_entry:
-                    merged_data = merge_price_data(existing_entry["data"], new_data)
+                    previous = existing_entry["data"]
+                    previous_split = previous.get("_last_split_at")
+                    fetched = parse_quote_time(previous.get("_fetched_at"))
+                    changed_units = split_at is not None and (
+                        (previous_split is not None and previous_split != split_at)
+                        or (fetched is not None and split_at > fetched.timestamp())
+                    )
+                    if changed_units:
+                        # Values before a split cannot be merged with the new share units.
+                        previous = {key: value for key, value in previous.items() if key not in PRICE_NUMBERS and key != "_fetched_at" and not key.startswith("_quote")}
+                    merged_data = merge_price_data(previous, new_data)
                 else:
                     merged_data = new_data
 
@@ -498,10 +520,10 @@ def _fetch_fast_data(tickers: list[str], prepost: bool = False) -> dict:
                     # First bar's open is the session open price.
                     "open": float(open_series.iloc[0]) if not open_series.empty else None,
                     # Sum of all intraday bar volumes equals total day volume.
-                    "volume": int(vol_series.sum()) if not vol_series.empty else None,
+                    "volume": int(total) if not vol_series.empty and (total := finite_number(vol_series.sum())) is not None else None,
                     # market_cap and currency omitted intentionally — see docstring.
                 }
-            except (KeyError, IndexError, ValueError, TypeError) as e:
+            except (KeyError, IndexError, ValueError, TypeError, OverflowError) as e:
                 logging.warning(
                     f"Failed to extract fast data for {ticker} from batch download: {e}"
                 )
@@ -654,66 +676,113 @@ def get_historical_data(ticker: str, period: str, interval: str = "1d"):
         return df
 
 
-def get_news_for_tickers(tickers: list[str]) -> list[dict] | None:
-    all_news, seen_urls = [], set()
-    for ticker in tickers:
-        news_items = get_news_data(ticker)
-        if news_items:
-            for item in news_items:
-                if (link := item.get("link")) and link not in seen_urls:
-                    all_news.append(item)
-                    seen_urls.add(link)
-    if not all_news:
-        return None if len(tickers) > 0 else []
-    all_news.sort(key=lambda x: x["publish_datetime_utc"], reverse=True)
-    return all_news
+def clear_news_cache(tickers=None):
+    with _cache_lock:
+        if tickers is None:
+            _news_cache.clear()
+            _news_versions.clear()
+        else:
+            for ticker in tickers:
+                _news_cache.pop(ticker.upper(), None)
+                _news_versions.pop(ticker.upper(), None)
 
 
-def get_news_data(ticker: str) -> list[dict] | None:
+def get_news_for_tickers(tickers: list[str], force_refresh: bool = False, cancelled=None) -> list[dict] | None:
+    """Keep usable articles when another symbol fails; empty success is distinct."""
+    all_news, seen_articles = [], set()
+    succeeded = not tickers
+    for ticker in dict.fromkeys(tickers):
+        if cancelled is not None and cancelled():
+            break
+        try:
+            news_items = get_news_data(ticker, force_refresh=True) if force_refresh else get_news_data(ticker)
+        except Exception:
+            logging.error("News retrieval failed for %s", ticker)
+            continue
+        if news_items is None:
+            continue
+        succeeded = True
+        for item in news_items:
+            if not isinstance(item, dict):
+                continue
+            link = item.get("link")
+            title = item.get("title")
+            identity: tuple[str, ...]
+            if isinstance(link, str) and link:
+                identity = ("url", link)
+            elif isinstance(title, str) and title.strip() and title != "N/A":
+                identity = ("article", title, str(item.get("publisher")), str(item.get("publish_datetime_utc")))
+            else:
+                continue
+            if identity not in seen_articles:
+                all_news.append(deepcopy(item))
+                seen_articles.add(identity)
+    def date_key(item):
+        stamp = item.get("publish_datetime_utc")
+        if not isinstance(stamp, datetime):
+            return datetime.min.replace(tzinfo=timezone.utc)
+        return stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp.astimezone(timezone.utc)
+    all_news.sort(key=date_key, reverse=True)
+    return all_news if succeeded else None
+
+
+def get_news_data(ticker: str, force_refresh: bool = False) -> list[dict] | None:
     if not ticker:
         return []
     normalized_ticker = ticker.upper()
     now = datetime.now(timezone.utc)
-    if normalized_ticker in _news_cache:
-        timestamp, cached_data = _news_cache[normalized_ticker]
+    with _cache_lock:
+        entry = deepcopy(_news_cache.get(normalized_ticker))
+    if entry is not None and not force_refresh:
+        timestamp, cached_data = entry
         if (now - timestamp).total_seconds() < NEWS_CACHE_DURATION_SECONDS:
             return cached_data
-    info = get_ticker_info(ticker)
-    if not info:
+    with _cache_lock:
+        token = object()
+        _news_versions[normalized_ticker] = token
+    try:
+        if not get_ticker_info(ticker):
+            return None
+        raw_news = yf.Ticker(normalized_ticker).news
+        if raw_news is None:
+            raw_news = []
+        if not isinstance(raw_news, list):
+            return None
+        processed_news = []
+        for item in raw_news:
+            content = item.get("content") if isinstance(item, dict) else None
+            if not isinstance(content, dict) or not content:
+                continue
+            publish_time_utc = None
+            publish_time_str = "N/A"
+            pub_date = content.get("pubDate")
+            if isinstance(pub_date, str):
+                publish_time_str = pub_date
+                try:
+                    publish_time_utc = datetime.fromisoformat(pub_date.replace("Z", "+00:00"))
+                    if publish_time_utc.tzinfo is None:
+                        publish_time_utc = publish_time_utc.replace(tzinfo=timezone.utc)
+                    publish_time_str = publish_time_utc.astimezone().strftime("%Y-%m-%d %H:%M %Z")
+                except (ValueError, TypeError, OverflowError):
+                    publish_time_utc = None
+            provider = content.get("provider")
+            canonical = content.get("canonicalUrl")
+            def text(value):
+                return str(value) if value is not None else "N/A"
+            processed_news.append(dict(
+                source_ticker=normalized_ticker, title=text(content.get("title")),
+                summary=text(content.get("summary")),
+                publisher=text(provider.get("displayName") if isinstance(provider, dict) else None),
+                link=canonical.get("url") if isinstance(canonical, dict) else None,
+                publish_time=publish_time_str, publish_datetime_utc=publish_time_utc,
+            ))
+        with _cache_lock:
+            if _news_versions.get(normalized_ticker) is token:
+                _news_cache[normalized_ticker] = (datetime.now(timezone.utc), deepcopy(processed_news))
+        return processed_news
+    except Exception:
+        logging.error("News retrieval failed for %s", normalized_ticker)
         return None
-    raw_news = yf.Ticker(normalized_ticker).news
-    if not raw_news:
-        return []
-    processed_news = []
-    for item in raw_news:
-        content = item.get("content", {})
-        if not content:
-            continue
-        publish_time_utc = None
-        publish_time_str = "N/A"
-        if pub_date_str := content.get("pubDate"):
-            try:
-                publish_time_utc = datetime.fromisoformat(
-                    pub_date_str.replace("Z", "+00:00")
-                )
-                publish_time_str = publish_time_utc.astimezone().strftime(
-                    "%Y-%m-%d %H:%M %Z"
-                )
-            except (ValueError, TypeError):
-                publish_time_str = pub_date_str
-        processed_news.append(
-            {
-                "source_ticker": normalized_ticker,
-                "title": content.get("title", "N/A"),
-                "summary": content.get("summary", "N/A"),
-                "publisher": content.get("provider", {}).get("displayName", "N/A"),
-                "link": content.get("canonicalUrl", {}).get("url", "#"),
-                "publish_time": publish_time_str,
-                "publish_datetime_utc": publish_time_utc,
-            }
-        )
-    _news_cache[normalized_ticker] = (datetime.now(timezone.utc), processed_news)
-    return processed_news
 
 
 def get_ticker_info_comparison(ticker: str) -> dict:

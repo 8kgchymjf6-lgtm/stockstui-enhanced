@@ -1,3 +1,6 @@
+RESERVED_LIST_NAMES = frozenset({"all", "history", "news", "options", "fred", "debug", "configs"})
+
+
 def slugify(name: str) -> str:
     """Converts a string to a snake_case identifier, safe for use as a file or category name."""
     return name.strip().lower().replace(" ", "_")
@@ -99,6 +102,9 @@ def merge_price_data(existing: dict, new_data: dict) -> dict:
     Returns:
         A new dictionary with the merged fields.
     """
+    from stockstui.data_validation import normalize_price_row
+    existing = normalize_price_row(existing) or {}
+    new_data = normalize_price_row(new_data) or {}
     merged = existing.copy()
 
     # Iterate through all fields provided in the update.
@@ -121,11 +127,11 @@ def merge_price_data(existing: dict, new_data: dict) -> dict:
                                 # But to prevent temporary API glitch overwrites, we default to the higher value.
                                 if new_ath > existing_ath_val:
                                     merged[k] = new_ath
-                            except (ValueError, TypeError):
+                            except (ValueError, TypeError, OverflowError):
                                 merged[k] = new_ath
                         else:
                             merged[k] = new_ath
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, OverflowError):
                     pass
             else:
                 # For all other fields, if they are not None, we update the cache.
@@ -147,11 +153,11 @@ def merge_price_data(existing: dict, new_data: dict) -> dict:
                         val_float = float(val)
                         if val_float > current_max:
                             current_max = val_float
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError, OverflowError):
                         pass
             if current_max > existing_ath_val:
                 merged["all_time_high"] = current_max
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             pass
 
     return merged

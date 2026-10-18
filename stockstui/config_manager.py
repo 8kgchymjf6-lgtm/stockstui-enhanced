@@ -6,7 +6,7 @@ import sys
 import copy
 import time
 import errno
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 
 if sys.platform == "win32":
     import msvcrt
@@ -16,6 +16,7 @@ import tempfile
 from threading import RLock
 from platformdirs import PlatformDirs
 from stockstui.config_validation import validate_config
+from stockstui.config_transaction import FILES, JOURNAL, commit_bundle, recover_pending, _sync_directory
 
 # Use platformdirs to determine the correct user directories.
 # This ensures we respect OS conventions (e.g., ~/.config vs ~/Library/Application Support)
@@ -128,6 +129,7 @@ class ConfigManager:
             app_root: The root path of the application package.
         """
         self._save_lock = RLock()
+        self._config_lock_depth = 0
         self._snapshots: dict[str, dict] = {}
         self._protected_files: dict[str, str] = {}
         self.recovery_messages: list[str] = []
@@ -143,6 +145,37 @@ class ConfigManager:
         # The database path now correctly uses the cache directory.
         self.db_path = self.user_cache_dir / "app_cache.db"
 
+        try:
+            with self._locked_configuration():
+                self._load_configuration()
+        except ConfigSaveError as error:
+            for name in FILES:
+                self._protected_files[name] = str(error)
+            self.recovery_messages.append(str(error))
+            self._load_configuration()
+
+    @contextmanager
+    def _locked_configuration(self):
+        with self._save_lock:
+            if self._config_lock_depth:
+                yield
+                return
+            try:
+                with _configuration_lock(self.user_config_dir / ".configuration.lock"):
+                    self._config_lock_depth = 1
+                    try:
+                        if (self.user_config_dir / JOURNAL).exists():
+                            with ExitStack() as locks:
+                                for name in sorted(FILES):
+                                    locks.enter_context(_configuration_lock(self.user_config_dir / ("." + name + ".lock")))
+                                recover_pending(self.user_config_dir)
+                        yield
+                    finally:
+                        self._config_lock_depth = 0
+            except (OSError, ValueError, TypeError, RecursionError) as error:
+                raise ConfigSaveError(str(error)) from error
+
+    def _load_configuration(self):
         self.settings: dict = self._load_or_create("settings.json")
 
         # Merge defaults for new keys to ensure backward compatibility
@@ -299,7 +332,7 @@ class ConfigManager:
             )
         user_path = self.user_config_dir / filename
         temp_path = None
-        with self._save_lock:
+        with self._locked_configuration():
             try:
                 with _configuration_lock(
                     self.user_config_dir / ("." + filename + ".lock")
@@ -313,6 +346,9 @@ class ConfigManager:
                             )
                         with open(user_path, encoding="utf-8") as existing:
                             current = json.load(existing)
+                        _, issues = validate_config(filename, current, {})
+                        if issues:
+                            raise ConfigSaveError("Configuration was changed to an invalid structure; repair it before saving.")
                         candidate = _merge_changes(baseline, candidate, current)
                     fd, name = tempfile.mkstemp(
                         prefix="." + filename + ".",
@@ -326,9 +362,14 @@ class ConfigManager:
                         os.fsync(stream.fileno())
                     os.replace(temp_path, user_path)
                     temp_path = None
+                    try:
+                        _sync_directory(self.user_config_dir)
+                    except OSError as error:
+                        # Replacement has committed; keep memory consistent with disk.
+                        logging.warning("Saved %s, but directory durability could not be confirmed: %s", filename, error)
                     self._snapshots[filename] = copy.deepcopy(candidate)
                     return candidate
-            except (OSError, ValueError, TypeError) as error:
+            except (OSError, ValueError, TypeError, RecursionError) as error:
                 raise ConfigSaveError(f"Could not save {filename}: {error}") from error
             finally:
                 if temp_path is not None:
@@ -359,6 +400,47 @@ class ConfigManager:
 
     def save_lists(self):
         self._save("lists")
+
+    def save_lists_and_settings(self):
+        """Commit list changes and their tab references as one recoverable operation."""
+        names = ("lists", "settings")
+        observed = {}
+        try:
+            with self._locked_configuration(), ExitStack() as locks:
+                for name in sorted(FILES):
+                    if name in self._protected_files:
+                        raise ConfigSaveError(f"{name} is protected until its original contents are repaired.")
+                    locks.enter_context(_configuration_lock(self.user_config_dir / ("." + name + ".lock")))
+                before, after, candidates = {}, {}, {}
+                for name in names:
+                    filename = name + ".json"
+                    path = self.user_config_dir / filename
+                    raw = path.read_bytes() if path.exists() else None
+                    before[filename] = raw
+                    current = json.loads(raw) if raw is not None else _MISSING
+                    baseline = self._snapshots.get(filename, _MISSING)
+                    if current is _MISSING and baseline is not _MISSING:
+                        raise ConfigSaveError("Configuration was removed in another window; reopen before saving.")
+                    if current is not _MISSING:
+                        _, issues = validate_config(filename, current, {})
+                        if issues:
+                            raise ConfigSaveError(f"{filename} has an invalid structure; original left untouched.")
+                        observed[filename] = current
+                    candidate = _merge_changes(baseline, getattr(self, name), current) if baseline is not _MISSING else copy.deepcopy(getattr(self, name))
+                    candidates[filename] = candidate
+                    after[filename] = json.dumps(candidate, indent=2, allow_nan=False).encode("utf-8")
+                commit_bundle(self.user_config_dir, before, after)
+                for name in names:
+                    filename = name + ".json"
+                    self._snapshots[filename] = copy.deepcopy(candidates[filename])
+                    setattr(self, name, candidates[filename])
+        except (OSError, ValueError, TypeError, RecursionError) as error:
+            for name in names:
+                filename = name + ".json"
+                value = observed.get(filename, self._snapshots.get(filename))
+                if value is not None:
+                    setattr(self, name, copy.deepcopy(value))
+            raise ConfigSaveError(f"List change was not saved: {error}") from error
 
     def save_portfolios(self):
         self._save("portfolios")

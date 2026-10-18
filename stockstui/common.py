@@ -16,7 +16,8 @@ class PriceDataUpdated(Message):
 class NewsDataUpdated(Message):
     """Posted when news data for a specific ticker (or tickers) is updated."""
 
-    def __init__(self, tickers_str: str, data: list[dict] | None) -> None:
+    def __init__(self, tickers_str: str, data: list[dict] | None, request_id: int | None = None) -> None:
+        self.request_id = request_id
         self.tickers_str = tickers_str
         self.data = data
         super().__init__()
@@ -25,8 +26,10 @@ class NewsDataUpdated(Message):
 class MarketStatusUpdated(Message):
     """Posted when market status is updated with detailed info"""
 
-    def __init__(self, status: dict) -> None:
+    def __init__(self, status: dict, calendar: str | None = None, request_id: int | None = None) -> None:
         self.status = status
+        self.calendar = calendar
+        self.request_id = request_id
         super().__init__()
 
 
@@ -141,3 +144,15 @@ class NotEmpty(Validator):
         if value.strip():
             return self.success()
         return self.failure("This field cannot be empty.")
+
+
+class ListName(Validator):
+    def validate(self, value: str) -> ValidationResult:
+        from stockstui.utils import RESERVED_LIST_NAMES, slugify
+        if not value.strip():
+            return self.failure("Enter a list name.")
+        if not value.isprintable():
+            return self.failure("List names cannot contain control characters.")
+        if slugify(value) in RESERVED_LIST_NAMES:
+            return self.failure("This name is reserved for a built-in tab.")
+        return self.success()

@@ -1,7 +1,7 @@
 # Local stability and validation
 
 Updated: 2026-10-18. Working branch: `fix/stability`.
-Local package version: `0.1.0b14+enhanced.20261018.1`, based on upstream b14.
+Local package version: `0.1.0b14+enhanced.20261018.2`, based on upstream b14.
 This identifies the locally maintained build; no public release is published.
 
 ## Completed audit
@@ -70,7 +70,69 @@ misleading step is removed. Mutation analysis is available through the separate 
 required gate, and is not claimed as performed by this validation. Broad
 style-only Ruff findings are also not part of the critical lint gate.
 
-## Latest local validation
+## Additional failure-path review
+
+- News and FRED workers snapshot their selection and reject superseded results,
+  including callbacks already queued on the UI thread. Cancellation finishes the
+  loading state, and global refresh retries news, history, options and FRED.
+  Forced refresh bypasses or invalidates the relevant caches. Market-status
+  messages also identify their calendar and request generation.
+- News tolerates missing nested fields and timestamps, distinguishes an empty
+  successful response from failure and keeps articles when another symbol fails.
+  Valid articles without a URL remain visible as plain text. News and FRED
+  caches return independent copies and reject older concurrent publications.
+  FRED validates response shapes and does not include API-key URLs in errors.
+- List rename/deletion commits settings references and list contents with a
+  durable undo journal. Startup recovers interrupted transactions before loading;
+  conflicting external edits preserve the journal and block writes for repair.
+  Existing per-file locking and three-way merges still apply. Single-file saves
+  synchronize the directory and retain the committed memory state if that final
+  durability check is unsupported.
+- List dialogs retain their original target after selection changes and reject
+  deleted targets. Built-in tab names cannot be used for new lists; invalid saved
+  configuration follows the existing protected-original recovery path. User list
+  names, aliases and modal headings render literally, including square brackets.
+- Provider and database numbers are normalized before merging and rendering.
+  Invalid incoming values cannot replace valid cached prices, move fetch times
+  or appear as infinity. Zero EPS/beta remain valid. Known splits invalidate
+  cached figures in the previous share units rather than retaining pre-split highs.
+- Partial historical frames and invalid volume/date values are handled before
+  rendering. Charts preserve currency, label UTC and scale extreme finite prices
+  internally while keeping original price labels; tick loops are bounded.
+  Subnormal ranges retain both endpoints, and small/large values use readable
+  scientific labels instead of rounding to zero or consuming the chart width.
+- Log notifications dispatch correctly on both the UI thread and worker threads.
+  Help/version/manual calls preserve diagnostic logs, and the notification
+  handler is detached even when the application exits with an exception.
+
+## Latest local validation (.2)
+
+The complete suite discovered 890 tests: 888 passed and two opt-in live tests
+were skipped. Both live tests also passed in a separate run against the public
+provider. The suite was rerun in two isolated processes after updating obsolete
+test expectations for literal Text cells and rejection of blank symbols. The
+arbitrary-symbol property test retains its broad generator and adds a fixed
+blank-symbol example.
+
+Coverage was measured on a complete instrumented run. After the last isolated
+chart correction, the old chart-module data was purged and the entire module
+was measured again with 56 focused tests, all passing. Other production files
+are byte-identical to the complete measurement. Final combined statement/branch
+coverage is 90.62%, above the enforced 80% minimum. The logs preserve failed
+intermediate expectations and distinguish the full suite from this recheck.
+
+Full-package mypy (49 source files), critical Ruff, shell syntax and whitespace
+checks passed on Linux/Python 3.14.4. Runtime dependency versions were preserved;
+the constraints snapshot records the actual runtime and validation tools used.
+Other Python versions and the remote CI matrix were not run locally.
+
+After installation, 84 regression tests passed against the actual pipx package
+from outside the source checkout. All 55 Python/resource files matched the wheel
+and source (49 Python files). All 40 other distribution versions, the launcher
+and the four personal JSON files were unchanged. Dependency compatibility passed,
+and pipx's package-version metadata matches the installed local build.
+
+## Previous local validation (.1)
 
 The complete coverage-gated run on Linux/Python 3.14.4 discovered 829 tests:
 827 passed and two opt-in live tests were skipped. Combined statement/branch

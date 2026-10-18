@@ -5,7 +5,7 @@ from textual.app import ComposeResult
 from textual import on
 
 # FIX: Changed 'from common import ...' to an absolute import from the package root.
-from stockstui.common import NotEmpty
+from stockstui.common import NotEmpty, ListName
 from stockstui.utils import slugify, parse_tags, format_tags
 
 
@@ -29,7 +29,7 @@ class ConfirmDeleteModal(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         """Creates the layout for the confirmation modal."""
         with Vertical(id="dialog"):
-            yield Label(self.prompt_text)
+            yield Label(self.prompt_text, markup=False)
             if self.require_typing:
                 yield Input(placeholder=self.item_name, id="confirmation_input")
             with Horizontal(id="dialog-buttons"):
@@ -75,7 +75,7 @@ class ListModal(ModalScreen[str | None]):
                 value=self.value,
                 placeholder=self.placeholder,
                 id="list-name-input",
-                validators=[NotEmpty()],
+                validators=[ListName()],
             )
             with Horizontal(id="dialog-buttons"):
                 yield Button(button_label, variant="primary", id=button_id)
@@ -441,7 +441,7 @@ class ConfirmAddToAllPortfoliosModal(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         """Creates the layout for the confirmation modal."""
         with Vertical(id="dialog"):
-            yield Label(f"Add {self.ticker} to all {self.portfolio_count} portfolios?")
+            yield Label(f"Add {self.ticker} to all {self.portfolio_count} portfolios?", markup=False)
             yield Label(
                 "This will add the stock to every portfolio you have created.",
                 classes="dim",

@@ -1,4 +1,7 @@
 import requests
+import math
+from copy import deepcopy
+from threading import RLock
 import logging
 import numpy as np
 from datetime import datetime, timezone
@@ -8,6 +11,19 @@ from typing import Optional, Dict, List, Any
 BASE_URL = "https://api.stlouisfed.org/fred"
 _series_cache: Dict[str, Any] = {}
 _info_cache: Dict[str, Any] = {}
+_cache_lock = RLock()
+_cache_versions: dict[tuple[str, str], object] = {}
+
+
+def clear_cache(series=None):
+    with _cache_lock:
+        keys = {key.upper() for key in series} if series is not None else set(_series_cache) | set(_info_cache) | {key for _, key in _cache_versions}
+        for key in keys:
+            _series_cache.pop(key, None)
+            _info_cache.pop(key, None)
+            _cache_versions.pop(("observations", key), None)
+            _cache_versions.pop(("info", key), None)
+
 CACHE_DURATION_SECONDS = 300  # 5 minutes
 
 # ASSUMPTION: 3000 observations covers 10+ years of daily data (~2520 trading days)
@@ -15,56 +31,68 @@ CACHE_DURATION_SECONDS = 300  # 5 minutes
 OBSERVATION_LIMIT = 3000
 
 
-def get_series_observations(
-    series_id: str, api_key: str, limit: int = OBSERVATION_LIMIT
-) -> Optional[List[Dict[str, Any]]]:
-    """
-    Fetches observations for a specific FRED series.
-    Returns observations in descending order (newest first).
-    """
+def _observations(value):
+    if not isinstance(value, list):
+        raise ValueError("Observations must be a list")
+    rows = []
+    seen = set()
+    for item in value:
+        if not isinstance(item, dict) or not isinstance(item.get("date"), str):
+            continue
+        try:
+            datetime.strptime(item["date"], "%Y-%m-%d")
+        except ValueError:
+            continue
+        if item["date"] in seen:
+            continue
+        row = deepcopy(item)
+        try:
+            number = float(row.get("value", "."))
+            if not math.isfinite(number):
+                row["value"] = "."
+        except (TypeError, ValueError, OverflowError):
+            row["value"] = "."
+        seen.add(row["date"])
+        rows.append(row)
+    if value and not rows:
+        raise ValueError("No valid observations")
+    return sorted(rows, key=lambda row: row["date"], reverse=True)
+
+
+def get_series_observations(series_id: str, api_key: str, limit: int = OBSERVATION_LIMIT) -> Optional[List[Dict[str, Any]]]:
     if not api_key:
         logging.error("FRED API key is missing.")
         return None
-
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+        return None
     series_id = series_id.upper()
     now = datetime.now(timezone.utc)
-
-    # Note: We omit limit from cache key for simplicity under the assumption
-    # that we always request the same "10-year" optimized amount for a given series.
-    # Keep a reference to cached data so we can fall back to it if the network request fails.
-    _cached_fallback = None
-    if series_id in _series_cache:
-        timestamp, data = _series_cache[series_id]
-        if (now - timestamp).total_seconds() < CACHE_DURATION_SECONDS:
-            # If cache has enough data, return it immediately
-            if len(data) >= limit:
-                return data
-            # Cache is fresh but has fewer entries than requested — still useful as fallback
-            _cached_fallback = data
-
+    with _cache_lock:
+        entry = deepcopy(_series_cache.get(series_id))
+    fallback = None
+    if entry:
+        timestamp, cached = entry
+        fallback = cached[:limit]
+        if (now - timestamp).total_seconds() < CACHE_DURATION_SECONDS and len(cached) >= limit:
+            return fallback
+    with _cache_lock:
+        token = object()
+        _cache_versions["observations", series_id] = token
     try:
-        url = f"{BASE_URL}/series/observations"
-        params: dict[str, Any] = {
-            "series_id": series_id,
-            "api_key": api_key,
-            "file_type": "json",
-            "sort_order": "desc",  # Get latest data first
-            "limit": limit,
-        }
-        response = requests.get(url, params=params, timeout=10)
+        params: dict[str, Any] = dict(series_id=series_id, api_key=api_key, file_type="json", sort_order="desc", limit=limit)
+        response = requests.get(f"{BASE_URL}/series/observations", params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
-
-        observations = data.get("observations", [])
-        _series_cache[series_id] = (now, observations)
-        return observations
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error fetching FRED series {series_id}: {e}")
-        # Fall back to cached data (even if it's smaller than requested) rather than losing it entirely
-        if _cached_fallback is not None:
-            logging.warning(f"Returning stale cached data for {series_id} due to network error.")
-            return _cached_fallback
-        return None
+        if not isinstance(data, dict):
+            raise ValueError("Response must be an object")
+        rows = _observations(data.get("observations"))[:limit]
+        with _cache_lock:
+            if _cache_versions.get(("observations", series_id)) is token:
+                _series_cache[series_id] = (now, deepcopy(rows))
+        return rows
+    except (requests.exceptions.RequestException, ValueError, TypeError, RecursionError):
+        logging.error("Could not retrieve FRED observations for %s", series_id)
+        return fallback
 
 
 def detect_frequency(observations: List[Dict[str, Any]]) -> str:
@@ -148,13 +176,14 @@ def compute_enhanced_metrics(
     # Extract numeric values, converting '.' (FRED's N/A) to NaN
     values = []
     for obs in observations:
-        val_str = obs["value"]
+        val_str = obs.get("value") if isinstance(obs, dict) else None
         if val_str == ".":
             values.append(np.nan)
         else:
             try:
-                values.append(float(val_str))
-            except (ValueError, TypeError):
+                val = float(val_str if val_str is not None else ".")
+                values.append(val if math.isfinite(val) else np.nan)
+            except (ValueError, TypeError, OverflowError):
                 values.append(np.nan)
 
     # Check if we have valid data
@@ -231,7 +260,7 @@ def compute_enhanced_metrics(
                     (current - metrics["hist_min_10y"]) / hist_range
                 ) * 100
 
-    return metrics
+    return {key: (float(value) if value is not None and math.isfinite(value) else None) for key, value in metrics.items()}
 
 
 def get_series_info(series_id: str, api_key: str) -> Optional[Dict[str, Any]]:
@@ -242,9 +271,15 @@ def get_series_info(series_id: str, api_key: str) -> Optional[Dict[str, Any]]:
     if not api_key:
         return None
 
-    if series_id in _info_cache:
-        return _info_cache[series_id]
+    series_id = series_id.upper()
+    with _cache_lock:
+        cached = deepcopy(_info_cache.get(series_id))
+    if cached is not None:
+        return cached
 
+    with _cache_lock:
+        token = object()
+        _cache_versions["info", series_id] = token
     try:
         url = f"{BASE_URL}/series"
         params: dict[str, Any] = {
@@ -256,13 +291,15 @@ def get_series_info(series_id: str, api_key: str) -> Optional[Dict[str, Any]]:
         response.raise_for_status()
         data = response.json()
 
-        series_list = data.get("seriess", [])
-        if series_list:
-            _info_cache[series_id] = series_list[0]
-            return series_list[0]
+        series_list = data.get("seriess", []) if isinstance(data, dict) else []
+        if isinstance(series_list, list) and series_list and isinstance(series_list[0], dict):
+            with _cache_lock:
+                if _cache_versions.get(("info", series_id)) is token:
+                    _info_cache[series_id] = deepcopy(series_list[0])
+            return deepcopy(series_list[0])
         return None
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error fetching FRED series info {series_id}: {e}")
+    except (requests.exceptions.RequestException, ValueError, TypeError, RecursionError):
+        logging.error("Could not retrieve FRED metadata for %s", series_id)
         return None
 
 
@@ -285,9 +322,10 @@ def search_series(search_text: str, api_key: str) -> List[Dict[str, Any]]:
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
-        return data.get("seriess", [])
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error searching FRED series '{search_text}': {e}")
+        rows = data.get("seriess", []) if isinstance(data, dict) else []
+        return [deepcopy(row) for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    except (requests.exceptions.RequestException, ValueError, TypeError, RecursionError):
+        logging.error("Could not search FRED series")
         return []
 
 
@@ -336,7 +374,7 @@ def get_series_summary(series_id: str, api_key: str) -> Dict[str, Any]:
         summary["units_short"] = info.get("units_short") or ""
 
         # Parse frequency from info (FRED uses codes like 'Monthly', 'Quarterly', etc.)
-        freq_str = info.get("frequency", "").lower()
+        freq_str = str(info.get("frequency") or "").lower()
         if "quarterly" in freq_str:
             summary["frequency"] = "Q"
             tailored_limit = 4 * 11
@@ -369,6 +407,9 @@ def get_series_summary(series_id: str, api_key: str) -> Dict[str, Any]:
         return summary
 
     try:
+        obs_list = _observations(obs_list)
+        if not obs_list:
+            return summary
         # Detect frequency from observations if not determined from metadata
         detected_freq = detect_frequency(obs_list)
         if summary["frequency"] == "M":  # Use detected if metadata wasn't definitive
@@ -467,6 +508,9 @@ def get_series_summary(series_id: str, api_key: str) -> Dict[str, Any]:
         )
         summary.update(enhanced)
 
+        for key, value in summary.items():
+            if isinstance(value, (float, int)) and not math.isfinite(value):
+                summary[key] = "N/A" if key in ("current", "change_1p", "change_1y", "change_5y") else None
         return summary
     except Exception as e:
         logging.error(f"Error calculating summary for {series_id}: {e}")

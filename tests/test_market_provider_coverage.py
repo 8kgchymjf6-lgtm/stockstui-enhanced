@@ -486,9 +486,9 @@ class TestMarketProviderCoverage(unittest.TestCase):
             "stockstui.data_providers.market_provider.get_news_data",
             return_value=[],
         ):
-            self.assertIsNone(
-                market_provider.get_news_for_tickers(["AAPL"])
-            )
+            self.assertEqual(market_provider.get_news_for_tickers(["AAPL"]), [])
+        with patch.object(market_provider, "get_news_data", return_value=None):
+            self.assertIsNone(market_provider.get_news_for_tickers(["AAPL"]))
 
     def test_ticker_info_comparison_handles_each_failure(self):
         """Comparison helper should isolate batch, pre/post, and outer failures."""

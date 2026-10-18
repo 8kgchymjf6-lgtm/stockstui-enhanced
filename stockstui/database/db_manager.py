@@ -6,6 +6,7 @@ from threading import RLock
 from pathlib import Path
 from datetime import datetime, timezone
 from stockstui.utils import merge_price_data
+from stockstui.data_validation import normalize_price_row
 
 
 # Only load data into memory if it's less than a day old.
@@ -166,9 +167,11 @@ class DbManager:
                     # FIX: Load data into the standardized dictionary format, not a tuple.
                     # The expiry is calculated from the stored timestamp.
                     expiry_dt = datetime.fromtimestamp(timestamp_float, tz=timezone.utc)
-                    data_dict = json.loads(data_json)
+                    data_dict = normalize_price_row(json.loads(data_json), ticker)
+                    if data_dict is None:
+                        raise ValueError("Invalid cached price row")
                     loaded_data[ticker] = {"expiry": expiry_dt, "data": data_dict}
-                except (json.JSONDecodeError, ValueError, TypeError, OSError):
+                except (json.JSONDecodeError, ValueError, TypeError, OSError, OverflowError, RecursionError):
                     logging.warning(
                         f"Failed to decode or parse price data for '{ticker}' from DB."
                     )

@@ -1,4 +1,5 @@
 import argparse
+from stockstui.utils import RESERVED_LIST_NAMES
 from importlib import metadata
 
 try:
@@ -28,6 +29,9 @@ class SessionListAction(argparse.Action):
                     f"Argument must be in format NAME=TICKER1,TICKER2,... Got: {value}",
                 )
             name, tickers_str = value.split("=", 1)
+            name = name.strip().lower().replace("_", " ")
+            if not name or not name.isprintable() or name in RESERVED_LIST_NAMES:
+                raise argparse.ArgumentError(self, "Choose a nonempty list name different from built-in tabs.")
             tickers = [t.strip().upper() for t in tickers_str.split(",") if t.strip()]
             if not tickers:
                 raise argparse.ArgumentError(

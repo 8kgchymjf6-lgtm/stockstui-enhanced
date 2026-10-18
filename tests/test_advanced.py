@@ -1,5 +1,5 @@
 import unittest
-from hypothesis import given, strategies as st
+from hypothesis import example, given, strategies as st
 from pydantic import BaseModel, Field, ValidationError
 from typing import Optional
 from stockstui.presentation import formatter
@@ -57,6 +57,7 @@ class TestAdvanced(unittest.TestCase):
             max_size=10,
         )
     )
+    @example(data=[dict(symbol=" ", price=1.0, previous_close=1.0)])
     def test_formatter_with_hypothesis(self, data):
         """Use Hypothesis to find edge cases in the formatter."""
         old_prices = {item["symbol"]: item["price"] for item in data}
@@ -65,7 +66,9 @@ class TestAdvanced(unittest.TestCase):
         # This will run with many different combinations of symbols and prices
         result = formatter.format_price_data_for_table(data, old_prices, alias_map)
 
-        self.assertEqual(len(result), len(data))
+        valid_symbols = [item["symbol"] for item in data if item["symbol"].strip()]
+        self.assertEqual(len(result), len(valid_symbols))
+        self.assertEqual([row["Ticker"] for row in result], valid_symbols)
         for row in result:
             self.assertIn("Ticker", row)
             self.assertIn("Price", row)

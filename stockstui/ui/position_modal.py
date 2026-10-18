@@ -23,7 +23,7 @@ class PositionModal(ModalScreen[tuple[float, float] | None]):
     def compose(self) -> ComposeResult:
         """Creates the layout for the position modal."""
         with Vertical(id="dialog"):
-            yield Label(f"Edit Position: {self.symbol}", classes="modal-header")
+            yield Label(f"Edit Position: {self.symbol}", classes="modal-header", markup=False)
 
             with Grid(classes="input-grid"):
                 yield Label("Quantity:", classes="field-label")

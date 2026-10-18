@@ -1,4 +1,5 @@
 import logging
+import threading
 from typing import Any
 from textual.app import App
 
@@ -41,21 +42,17 @@ class TextualHandler(logging.Handler):
             elif record.levelno >= logging.WARNING:
                 severity = "warning"
 
-            # FIX: Always use call_from_thread. This is the canonical way to
-            # schedule a callback on the main event loop thread from any thread,
-            # including the main one. It ensures thread-safety without complex checks.
+            # Textual rejects call_from_thread on its own event-loop thread.
             try:
-                self.app.call_from_thread(
-                    self.app.notify,
-                    message,
-                    title=record.levelname.capitalize(),
-                    severity=severity,
-                    timeout=8,
-                )
-            except RuntimeError as e:
+                options = dict(title=record.levelname.capitalize(), severity=severity, timeout=8)
+                if threading.get_ident() == app._thread_id:
+                    app.notify(message, **options)
+                else:
+                    self.app.call_from_thread(self.app.notify, message, **options)
+            except RuntimeError:
                 # This can happen if a worker thread tries to log a message
                 # after the app has already shut down. It's safe to ignore.
-                logging.debug(f"TextualHandler RuntimeError (app shutting down?): {e}")
-                pass
+                # Logging here would recursively call this same handler.
+                return
         except Exception:
             self.handleError(record)

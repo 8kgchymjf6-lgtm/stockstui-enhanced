@@ -26,7 +26,7 @@ class QuickEditTickerModal(ModalScreen[tuple[str, str] | None]):
     def compose(self) -> ComposeResult:
         """Creates the layout for the quick edit modal."""
         with Vertical(id="dialog"):
-            yield Label(f"Quick Edit: {self.ticker}")
+            yield Label(f"Quick Edit: {self.ticker}", markup=False)
             yield Label("Select field to edit:", classes="field-label")
             yield Select(
                 options=[("Alias", "alias"), ("Note", "note"), ("Tags", "tags")],

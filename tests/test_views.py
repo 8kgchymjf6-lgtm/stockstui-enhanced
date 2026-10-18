@@ -33,6 +33,7 @@ class ViewsTestApp(App):
         self.news_ticker = None
         self._news_content_for_ticker = None
         self._last_news_content = None
+        self.cancel_news_request = MagicMock()
         self.fetch_news = MagicMock()
         self.theme_variables = {}
         self.active_list_category = "stocks"

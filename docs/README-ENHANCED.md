@@ -24,6 +24,11 @@ Enhanced release:
 
 - `v1.0.0-enhanced`
 
+Current local stability build:
+
+- `0.1.0b14+enhanced.20261018.2` (upstream b14; no public release published)
+- Validation and recovery notes: [STABILITY.md](STABILITY.md)
+
 Default branch:
 
 - `main`

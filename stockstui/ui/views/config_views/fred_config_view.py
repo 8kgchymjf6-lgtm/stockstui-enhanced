@@ -108,7 +108,7 @@ class FredConfigView(ScrollableContainer):
                 desc_text = Text("Loading...", style=muted_color)
                 missing_descriptions.append(series_id)
 
-            table.add_row(series_id, alias_text, desc_text, key=series_id)
+            table.add_row(Text(series_id), alias_text, desc_text, key=series_id)
 
         # Only fetch missing descriptions
         if missing_descriptions and api_key:

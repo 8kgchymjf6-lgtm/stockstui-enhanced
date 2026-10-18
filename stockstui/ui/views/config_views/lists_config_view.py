@@ -1,3 +1,4 @@
+from functools import partial
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -83,7 +84,7 @@ class ListsConfigView(Vertical):
             visible = col["visible"]
 
             item_content = Horizontal(
-                Label(key, classes="column-label"),
+                Label(key, classes="column-label", markup=False),
                 Switch(value=visible, classes="column-switch"),
                 classes="column-item-layout",
             )
@@ -110,7 +111,7 @@ class ListsConfigView(Vertical):
             for category in categories:
                 view.append(
                     ListItem(
-                        Label(category.replace("_", " ").capitalize()), name=category
+                        Label(category.replace("_", " ").capitalize(), markup=False), name=category
                     )
                 )
 
@@ -179,7 +180,7 @@ class ListsConfigView(Vertical):
                 note_text = Text(note_raw)
                 tags_raw = item.get("tags") or ""
                 tags_text = Text(tags_raw)
-                table.add_row(ticker, alias, note_text, tags_text, key=ticker)
+                table.add_row(Text(ticker), Text(alias), note_text, tags_text, key=ticker)
 
     @on(ListView.Selected)
     def on_list_view_selected(self, event: ListView.Selected):
@@ -199,6 +200,9 @@ class ListsConfigView(Vertical):
 
         @config_errors(app=self.app)
         async def on_close(new_name: str | None):
+            if new_name and new_name in self.app.config.lists:
+                self.app.notify(f"List '{new_name}' already exists.", severity="warning")
+                return
             if new_name and new_name not in self.app.config.lists:
                 self.app.config.lists[new_name] = []
                 self.app.config.save_lists()
@@ -230,6 +234,9 @@ class ListsConfigView(Vertical):
             else:
                 entries = result
 
+            if category not in self.app.config.lists:
+                self.app.notify("The selected list no longer exists. Reopen the dialog.", severity="warning")
+                return
             added = []
             skipped = []
             for ticker, alias, note, tags in entries:
@@ -286,14 +293,17 @@ class ListsConfigView(Vertical):
         )
         self.app.push_screen(
             ConfirmDeleteModal(category, prompt, require_typing=True),
-            self.on_delete_list_confirmed,
+            partial(self.on_delete_list_confirmed, category=category),
         )
 
     @config_errors
-    async def on_delete_list_confirmed(self, confirmed: bool):
+    async def on_delete_list_confirmed(self, confirmed: bool, category: str | None = None):
         """Callback for the delete list confirmation modal."""
         if confirmed:
-            category = self.app.active_list_category
+            category = category or self.app.active_list_category
+            if category not in self.app.config.lists:
+                self.app.notify("The selected list no longer exists.", severity="warning")
+                return
             settings_updated = False
 
             if self.app.config.get_setting("default_tab_category") == category:
@@ -306,12 +316,13 @@ class ListsConfigView(Vertical):
                 self.app.config.settings["hidden_tabs"] = hidden_tabs
                 settings_updated = True
 
-            if settings_updated:
-                self.app.config.save_settings()
-
             del self.app.config.lists[category]
-            self.app.active_list_category = None
-            self.app.config.save_lists()
+            if settings_updated:
+                self.app.config.save_lists_and_settings()
+            else:
+                self.app.config.save_lists()
+            if self.app.active_list_category == category:
+                self.app.active_list_category = None
             await self.app._rebuild_app("configs", config_sub_view="lists")
             self.app.notify(f"List '{category}' deleted.")
 
@@ -325,10 +336,17 @@ class ListsConfigView(Vertical):
 
         @config_errors(app=self.app)
         async def on_close(new_name: str | None):
+            if new_name and category not in self.app.config.lists:
+                self.app.notify("The selected list no longer exists.", severity="warning")
+                return
+            if new_name and new_name != category and new_name in self.app.config.lists:
+                self.app.notify(f"List '{new_name}' already exists.", severity="warning")
+                return
             if (
                 new_name
                 and new_name != category
                 and new_name not in self.app.config.lists
+                and category in self.app.config.lists
             ):
                 settings_updated = False
 
@@ -336,9 +354,6 @@ class ListsConfigView(Vertical):
                     (new_name if k == category else k): v
                     for k, v in self.app.config.lists.items()
                 }
-
-                if self.app.active_list_category == category:
-                    self.app.active_list_category = new_name
 
                 if self.app.config.get_setting("default_tab_category") == category:
                     self.app.config.settings["default_tab_category"] = new_name
@@ -353,9 +368,11 @@ class ListsConfigView(Vertical):
                     settings_updated = True
 
                 if settings_updated:
-                    self.app.config.save_settings()
-
-                self.app.config.save_lists()
+                    self.app.config.save_lists_and_settings()
+                else:
+                    self.app.config.save_lists()
+                if self.app.active_list_category == category:
+                    self.app.active_list_category = new_name
                 await self.app._rebuild_app("configs", config_sub_view="lists")
                 self.app.notify(f"List '{category}' renamed to '{new_name}'.")
 
@@ -377,7 +394,8 @@ class ListsConfigView(Vertical):
         # instead of scraping from the table. The table cells might display formatted/fallback
         # values (like the ticker symbol as the alias, or "N/A" for empty notes), which
         # we do not want to autofill in the Edit dialog.
-        list_data = self.app.config.lists.get(self.app.active_list_category, [])
+        category = self.app.active_list_category
+        list_data = self.app.config.lists.get(category, [])
         if table.cursor_row < 0 or table.cursor_row >= len(list_data):
             self.app.notify("Select a ticker to edit.", severity="warning")
             return
@@ -391,10 +409,14 @@ class ListsConfigView(Vertical):
         @config_errors(app=self.app)
         def on_close(result: tuple[str, str, str, str] | None):
             if result:
+                entries = self.app.config.lists.get(category)
+                if entries is None or not any(item["ticker"].upper() == original_ticker.upper() for item in entries):
+                    self.app.notify("The selected ticker or list no longer exists. Reopen the dialog.", severity="warning")
+                    return
                 new_ticker, new_alias, new_note, new_tags = result
                 is_duplicate = any(
                     item["ticker"].upper() == new_ticker.upper()
-                    for item in self.app.config.lists[self.app.active_list_category]
+                    for item in self.app.config.lists[category]
                     if item["ticker"].upper() != original_ticker.upper()
                 )
                 if is_duplicate:
@@ -403,7 +425,7 @@ class ListsConfigView(Vertical):
                         severity="error",
                     )
                     return
-                for item in self.app.config.lists[self.app.active_list_category]:
+                for item in self.app.config.lists[category]:
                     if item["ticker"].upper() == original_ticker.upper():
                         item["ticker"] = new_ticker
                         item["alias"] = new_alias
@@ -426,7 +448,8 @@ class ListsConfigView(Vertical):
     async def on_delete_ticker_pressed(self):
         """Handles the 'Remove Ticker' button press, opening a confirmation modal."""
         table = self.query_one("#ticker-table", DataTable)
-        if not self.app.active_list_category or table.cursor_row < 0:
+        category = self.app.active_list_category
+        if not category or not 0 <= table.cursor_row < table.row_count:
             self.app.notify("Select a ticker to delete.", severity="warning")
             return
         ticker = extract_cell_text(table.get_cell_at(Coordinate(table.cursor_row, 0)))
@@ -434,9 +457,15 @@ class ListsConfigView(Vertical):
         @config_errors(app=self.app)
         def on_close(confirmed: bool):
             if confirmed:
-                self.app.config.lists[self.app.active_list_category] = [
+                if category not in self.app.config.lists:
+                    self.app.notify("The selected list no longer exists.", severity="warning")
+                    return
+                if not any(item["ticker"].upper() == ticker.upper() for item in self.app.config.lists[category]):
+                    self.app.notify("The selected ticker no longer exists.", severity="warning")
+                    return
+                self.app.config.lists[category] = [
                     item
-                    for item in self.app.config.lists[self.app.active_list_category]
+                    for item in self.app.config.lists[category]
                     if item["ticker"].upper() != ticker.upper()
                 ]
                 self.app.config.save_lists()

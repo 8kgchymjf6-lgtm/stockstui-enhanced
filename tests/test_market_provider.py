@@ -93,7 +93,7 @@ class TestMarketProvider(unittest.TestCase):
         self.assertEqual(item["title"], "Test News")
         self.assertEqual(item["summary"], "N/A")
         self.assertEqual(item["publisher"], "N/A")
-        self.assertEqual(item["link"], "#")
+        self.assertIsNone(item["link"])
 
     @patch("stockstui.data_providers.market_provider.yf.download")
     @patch("stockstui.data_providers.market_provider.yf.Ticker")
