@@ -6,6 +6,7 @@ from textual.validation import Number
 from textual.binding import Binding
 
 from stockstui.common import NotEmpty
+from stockstui.config_validation import MARKET_CALENDAR_CHOICES
 
 
 class GeneralConfigView(Vertical):
@@ -35,31 +36,7 @@ class GeneralConfigView(Vertical):
                 with Horizontal(classes="config-option-horizontal"):
                     yield Label("Market Status\nCalendar:", classes="config-label")
                     yield Select(
-                        [
-                            ("NYSE (US)", "NYSE"),
-                            ("TSX (Toronto)", "TSX"),
-                            ("BMF (Brazil)", "BMF"),
-                            ("LSE (London)", "LSE"),
-                            ("EUREX (Europe)", "EUREX"),
-                            ("SIX (Swiss)", "SIX"),
-                            ("OSE (Oslo)", "OSE"),
-                            ("JPX (Japan)", "JPX"),
-                            ("HKEX (Hong Kong)", "HKEX"),
-                            ("SSE (Shanghai)", "SSE"),
-                            ("ASX (Australia)", "ASX"),
-                            ("BSE (Bombay)", "BSE"),
-                            ("TASE (Tel Aviv)", "TASE"),
-                            ("CME (Chicago)", "CME"),
-                            ("CME Equity Futures", "CME_Equity"),
-                            ("CME Bond Futures", "CME_Bond"),
-                            ("CME Agriculture Futures", "CME_Agriculture"),
-                            ("CME Crypto Futures", "CME_Crypto"),
-                            ("CFE (CBOE Futures)", "CFE"),
-                            ("ICE Futures", "ICE"),
-                            ("SIFMA US Bonds", "SIFMAUS"),
-                            ("SIFMA UK Bonds", "SIFMAUK"),
-                            ("SIFMA JP Bonds", "SIFMAJP"),
-                        ],
+                        MARKET_CALENDAR_CHOICES,
                         id="market-calendar-select",
                     )
                 with Horizontal(classes="config-option-horizontal"):

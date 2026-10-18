@@ -55,13 +55,14 @@ class FredConfigView(ScrollableContainer):
     def on_mount(self) -> None:
         """Called when the view is mounted."""
         self._loading = True
-        try:
-            table = self.query_one("#fred-series-table", DataTable)
-            table.add_columns("Series ID", "Alias", "Description")
-            self.repopulate_settings()
-            self.repopulate_series_table()
-        finally:
-            self._loading = False
+        with self.prevent(Switch.Changed, Input.Changed):
+            try:
+                table = self.query_one("#fred-series-table", DataTable)
+                table.add_columns("Series ID", "Alias", "Description")
+                self.repopulate_settings()
+                self.repopulate_series_table()
+            finally:
+                self._loading = False
 
     def repopulate_settings(self):
         """Populate generic settings."""

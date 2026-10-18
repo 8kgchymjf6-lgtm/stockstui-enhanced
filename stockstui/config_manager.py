@@ -14,6 +14,7 @@ else:
 import tempfile
 from threading import RLock
 from platformdirs import PlatformDirs
+from stockstui.config_validation import validate_config
 
 # Use platformdirs to determine the correct user directories.
 # This ensures we respect OS conventions (e.g., ~/.config vs ~/Library/Application Support)
@@ -127,6 +128,8 @@ class ConfigManager:
         """
         self._save_lock = RLock()
         self._snapshots: dict[str, dict] = {}
+        self._protected_files: dict[str, str] = {}
+        self.recovery_messages: list[str] = []
         # Define user-specific and default configuration directories
         self.user_config_dir = Path(dirs.user_config_dir)
         self.user_cache_dir = Path(dirs.user_cache_dir)
@@ -170,7 +173,7 @@ class ConfigManager:
                                 ):
                                     self.settings[k].append(default_col)
                                     updated = True
-                    if updated:
+                    if updated and "settings.json" not in self._protected_files:
                         self.save_settings()
         except Exception as e:
             logging.error(f"Failed to merge default settings: {e}")
@@ -179,66 +182,120 @@ class ConfigManager:
         self.themes: dict = self._load_or_create("themes.json")
         self.portfolios: dict = self._load_or_create("portfolios.json")
 
+        if "settings.json" in self._protected_files:
+            self._snapshots["settings.json"] = copy.deepcopy(self.settings)
+
         # Migrate existing stocks to default portfolio on first run
         try:
             self._migrate_stocks_to_default_portfolio()
         except ConfigSaveError as error:
             logging.error("Could not save portfolio migration: %s", error)
 
-    def _load_or_create(self, filename: str) -> dict:
-        """
-        Loads a JSON configuration file from the user's config directory.
-        If the file is missing or corrupted, it's restored from the default config.
-        """
-        user_path = self.user_config_dir / filename
-        default_path = self.default_dir / filename
-
-        data = None
-        if user_path.exists():
+    def _backup_original(self, path: Path, raw: bytes) -> Path:
+        """Copy exact bytes; never move or replace the source or an older backup."""
+        index = 0
+        while True:
+            backup = path.with_name(path.name + ".bak" + (f".{index}" if index else ""))
             try:
-                with open(user_path, "r") as f:
-                    if os.fstat(f.fileno()).st_size == 0:
-                        raise json.JSONDecodeError("File is empty.", "", 0)
-                    data = json.load(f)
-            except (json.JSONDecodeError, IOError) as e:
-                logging.warning(
-                    f"User config '{user_path}' is corrupted: {e}. Restoring from default."
-                )
-                try:
-                    backup_path = user_path.with_suffix(user_path.suffix + ".bak")
-                    os.replace(user_path, backup_path)
-                    logging.info(f"Corrupted file backed up to '{backup_path.name}'.")
-                except OSError as backup_err:
-                    logging.error(
-                        f"Could not back up corrupted file '{user_path}': {backup_err}"
-                    )
-                data = None
+                fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(raw)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                return backup
+            except FileExistsError:
+                if backup.read_bytes() == raw:
+                    return backup
+                index += 1
 
-        if data is None:
-            if not default_path.exists():
-                logging.critical(
-                    f"Default config '{default_path}' is missing! Cannot create user config."
-                )
-                return {}
+    def _recover_config(
+        self, filename: str, data: dict, issues: list[str], raw: bytes | None
+    ):
+        path = self.user_config_dir / filename
+        backup_note = "Original file left untouched."
+        if raw is not None:
             try:
-                with open(default_path, "r") as f_default:
-                    default_data = json.load(f_default)
-                self._atomic_save(filename, default_data)
-                logging.info(
-                    f"Created/Restored user config '{user_path}' from default."
-                )
-                return default_data
-            except (IOError, json.JSONDecodeError) as e:
+                backup = self._backup_original(path, raw)
+                backup_note += f" Backup: {backup}."
+            except OSError:
                 logging.error(
-                    f"Failed to create user config from '{default_path}': {e}"
+                    "Could not back up corrupted file '%s'; original left untouched.",
+                    path,
                 )
-                return {}
-
+                backup_note += " Backup could not be created."
+        message = (
+            f"{filename}: invalid configuration ({', '.join(issues[:3])}). "
+            f"Using safe values in memory. {backup_note} "
+            "This file is read-only. Repair or restore it, then restart the app to enable saving. "
+            "Other configuration files remain usable."
+        )
+        self._protected_files[filename] = message
+        self.recovery_messages.append(message)
         self._snapshots[filename] = copy.deepcopy(data)
+        logging.warning("%s", message)
+        return data
+
+    def _load_or_create(self, filename: str) -> dict:
+        """Load typed data; recover damaged user files in memory without replacing them."""
+        path = self.user_config_dir / filename
+        default_path = self.default_dir / filename
+        defaults = {}
+        if default_path.exists():
+            try:
+                with default_path.open(encoding="utf-8") as stream:
+                    defaults = json.load(stream)
+                if not isinstance(defaults, dict):
+                    raise ValueError("Default configuration must be an object")
+            except (OSError, ValueError, UnicodeError) as error:
+                logging.error(
+                    "Failed to create user config from '%s': %s", default_path, error
+                )
+                defaults = {}
+        elif not path.exists():
+            logging.critical(
+                "Default config '%s' is missing! Cannot create user config.",
+                default_path,
+            )
+            return {}
+        if not path.exists():
+            if not defaults:
+                return {}
+            try:
+                self._atomic_save(filename, defaults)
+            except ConfigSaveError as error:
+                logging.error(
+                    "Failed to create user config from '%s': %s", default_path, error
+                )
+            return copy.deepcopy(defaults)
+
+        raw = None
+        try:
+            raw = path.read_bytes()
+            value = json.loads(raw.decode("utf-8"))
+        except (OSError, ValueError, UnicodeError, RecursionError):
+            data, _ = validate_config(filename, [], defaults)
+            return self._recover_config(
+                filename, data, ["unreadable or invalid JSON"], raw
+            )
+        try:
+            data, issues = validate_config(filename, value, defaults)
+        except RecursionError:
+            data, _ = validate_config(filename, [], defaults)
+            return self._recover_config(
+                filename, data, ["configuration nesting is too deep"], raw
+            )
+        if issues:
+            return self._recover_config(filename, data, issues, raw)
+        self._snapshots[filename] = copy.deepcopy(value)
         return data
 
     def _atomic_save(self, filename: str, data: dict):
         """Serialize writers and atomically replace using a unique, durable temp file."""
+        if filename in self._protected_files:
+            raise ConfigSaveError(
+                f"{filename} is protected because its original contents need repair. "
+                "The original and its recovery copy have not been overwritten."
+            )
         user_path = self.user_config_dir / filename
         temp_path = None
         with self._save_lock:
@@ -308,6 +365,11 @@ class ConfigManager:
     def _migrate_stocks_to_default_portfolio(self):
         """Migrate existing stocks from lists to default portfolio if needed."""
         if "portfolios" not in self.portfolios:
+            return
+        if any(
+            name in getattr(self, "_protected_files", {})
+            for name in ("lists.json", "portfolios.json")
+        ):
             return
 
         # Check if migration was already done by looking for a migration flag

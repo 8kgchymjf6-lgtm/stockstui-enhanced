@@ -3,15 +3,25 @@
 from functools import wraps
 from inspect import iscoroutinefunction
 import logging
+import threading
 from stockstui.config_manager import ConfigSaveError
 from textual.widgets import Switch, Select, ContentSwitcher
 from textual.dom import NoMatches
+from textual.widgets._select import InvalidSelectValueError
 
 
 def config_errors(function=None, *, app=None):
     def decorate(callback):
         def report(args, error):
             owner = app if app is not None else getattr(args[0], "app", args[0])
+            if threading.get_ident() != owner._thread_id:
+                try:
+                    owner.call_from_thread(report, args, error)
+                except RuntimeError:
+                    logging.error(
+                        "Configuration change not saved after shutdown: %s", error
+                    )
+                return
             logging.error("Configuration change not saved: %s", error)
             owner.notify(
                 str(error), title="Change not saved", severity="error", timeout=12
@@ -52,8 +62,8 @@ def config_errors(function=None, *, app=None):
                         try:
                             owner.query_one(
                                 "#" + widget_id, Select
-                            ).value = owner.config.get_setting(key)
-                        except NoMatches:
+                            ).value = owner.config.get_setting(key, "NYSE" if key == "market_calendar" else owner.theme)
+                        except (NoMatches, InvalidSelectValueError):
                             pass
                 owner.call_later(
                     owner._rebuild_app,

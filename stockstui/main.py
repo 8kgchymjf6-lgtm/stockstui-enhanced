@@ -333,6 +333,8 @@ class StocksTUI(App):
         Called when the app is first mounted.
         """
         logging.info("Application mounting.")
+        for message in self.config.recovery_messages:
+            self.notify(message, title="Read-only configuration recovery", severity="warning", timeout=30)
 
         # Ensure themes are registered - safety check in case __init__ didn't complete
         if not self._available_theme_names:
@@ -362,28 +364,29 @@ class StocksTUI(App):
 
         # Guard updates with _loading to prevent side-effects during startup
         general_view._loading = True
-        try:
-            general_view.query_one("#theme-select", Select).set_options(
-                [(t, t) for t in self._available_theme_names]
-            )
-            general_view.query_one("#theme-select", Select).value = active_theme
-            general_view.query_one(
-                "#enable-pre-post-market-switch", Switch
-            ).value = self.config.get_setting("enable_pre_post_market", False)
-            general_view.query_one(
-                "#auto-refresh-switch", Switch
-            ).value = self.config.get_setting("auto_refresh", False)
-            general_view.query_one(
-                "#suppress-tui-logs-switch", Switch
-            ).value = self.config.get_setting("suppress_tui_logs", False)
-            general_view.query_one("#refresh-interval-input", Input).value = str(
-                self.config.get_setting("refresh_interval", 300.0)
-            )
-            general_view.query_one(
-                "#market-calendar-select", Select
-            ).value = self.config.get_setting("market_calendar", "NYSE")
-        finally:
-            general_view._loading = False
+        with self.prevent(Select.Changed, Switch.Changed):
+            try:
+                general_view.query_one("#theme-select", Select).set_options(
+                    [(t, t) for t in self._available_theme_names]
+                )
+                general_view.query_one("#theme-select", Select).value = active_theme
+                general_view.query_one(
+                    "#enable-pre-post-market-switch", Switch
+                ).value = self.config.get_setting("enable_pre_post_market", False)
+                general_view.query_one(
+                    "#auto-refresh-switch", Switch
+                ).value = self.config.get_setting("auto_refresh", False)
+                general_view.query_one(
+                    "#suppress-tui-logs-switch", Switch
+                ).value = self.config.get_setting("suppress_tui_logs", False)
+                general_view.query_one("#refresh-interval-input", Input).value = str(
+                    self.config.get_setting("refresh_interval", 300.0)
+                )
+                general_view.query_one(
+                    "#market-calendar-select", Select
+                ).value = self.config.get_setting("market_calendar", "NYSE")
+            finally:
+                general_view._loading = False
 
         # Use the user's configured default tab unless overridden by CLI flags below
         start_category = self.config.get_setting("default_tab_category", "all")
@@ -837,30 +840,31 @@ class StocksTUI(App):
 
         # Guard updates with _loading to prevent side-effects during rebuild
         general_view._loading = True
-        try:
-            default_tab_select = general_view.query_one("#default-tab-select", Select)
-            options = [
-                (t["name"], t["category"])
-                for t in self.tab_map
-                if t["category"] not in ["configs", "history", "news", "debug"]
-            ]
-            default_tab_select.set_options(options)
+        with self.prevent(Select.Changed, Switch.Changed):
+            try:
+                default_tab_select = general_view.query_one("#default-tab-select", Select)
+                options = [
+                    (t["name"], t["category"])
+                    for t in self.tab_map
+                    if t["category"] not in ["configs", "history", "news", "debug"]
+                ]
+                default_tab_select.set_options(options)
 
-            default_cat_value = self.config.get_setting("default_tab_category", "all")
+                default_cat_value = self.config.get_setting("default_tab_category", "all")
 
-            valid_option_values = [opt[1] for opt in options]
+                valid_option_values = [opt[1] for opt in options]
 
-            if default_cat_value in valid_option_values:
-                default_tab_select.value = default_cat_value
-            elif options:
-                default_tab_select.value = options[0][1]
-            else:
-                default_tab_select.clear()
+                if default_cat_value in valid_option_values:
+                    default_tab_select.value = default_cat_value
+                elif options:
+                    default_tab_select.value = options[0][1]
+                else:
+                    default_tab_select.clear()
 
-            # Refresh visible tabs list
-            general_view.repopulate_visible_tabs()
-        finally:
-            general_view._loading = False
+                # Refresh visible tabs list
+                general_view.repopulate_visible_tabs()
+            finally:
+                general_view._loading = False
 
         self.query_one(ListsConfigView).repopulate_lists()
 

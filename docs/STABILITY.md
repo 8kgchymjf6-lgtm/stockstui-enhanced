@@ -52,8 +52,7 @@ watchlist data is used by these tests.
 
 ## Deferred work
 
-The broad audit still has follow-up items: structural validation and recovery
-for malformed configuration files; late historical/options responses;
+The broad audit still has follow-up items: late historical/options responses;
 partial options payloads; options failure loading state; ticker suggestion
 formatting; and FRED leap-day calculations. The current changes focus on
 price/watchlist workflows. Broader CI gates, installer cleanup and larger
@@ -70,3 +69,24 @@ Before this change, source, tests and personal JSON configuration were archived
 in `stockstui-foer-stabilitetsrettelser-20261018.tar.gz` in the task outputs.
 The earlier full pipx backup is also retained there. Do not restore an old
 configuration over newer personal edits without comparing them first.
+
+## Follow-up: configuration startup recovery
+
+Structural configuration validation is now implemented for settings, watchlists,
+portfolios and themes. It checks the types consumed during startup, nested
+collections, duplicate ticker/column keys, refresh values and theme palettes.
+Valid custom settings and valid personal entries are retained.
+
+A damaged file is never replaced during startup. The app uses safe values in
+memory, preserves the original bytes and creates a separate recovery copy with
+private permissions when possible. Existing copies are not overwritten. The
+affected file is protected against all saves during this session; unaffected
+configuration files remain writable. The app warns about the file and explains
+that it must be repaired or restored, followed by an app restart. Automatic
+portfolio migration is skipped when watchlists or portfolios are damaged.
+Backup failure still leaves the original untouched and recovery protected.
+
+Programmatic control initialization is prevented from triggering save handlers.
+Save error presentation from a background thread is forwarded to the UI thread.
+`tests/test_config_recovery.py` adds 25 tests, including nine headless app-startup
+scenarios and preservation checks for originals and older backups.

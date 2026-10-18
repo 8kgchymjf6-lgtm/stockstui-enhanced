@@ -163,20 +163,20 @@ class TestConfigManager(unittest.TestCase):
 
         self.assertEqual(cm.settings["theme"], "user_theme")
         self.assertEqual(cm.settings["new_key"], "new_val")
-        self.assertEqual(cm.settings["column_settings"], default_settings["column_settings"])
+        self.assertEqual(
+            cm.settings["column_settings"], default_settings["column_settings"]
+        )
 
     def test_merge_column_settings(self):
         # User has some column settings
-        user_settings = {
-            "column_settings": [{"key": "Col1", "visible": False}]
-        }
+        user_settings = {"column_settings": [{"key": "Col1", "visible": False}]}
         (self.user_config_dir / "settings.json").write_text(json.dumps(user_settings))
 
         # Default has more column settings
         default_settings = {
             "column_settings": [
                 {"key": "Col1", "visible": True},
-                {"key": "Col2", "visible": True}
+                {"key": "Col2", "visible": True},
             ]
         }
         (self.default_dir / "settings.json").write_text(json.dumps(default_settings))
@@ -193,7 +193,7 @@ class TestConfigManager(unittest.TestCase):
 
     def test_handles_empty_user_file(self):
         settings_path = self.user_config_dir / "settings.json"
-        settings_path.write_text("") # Empty file
+        settings_path.write_text("")  # Empty file
 
         cm = ConfigManager(app_root=self.app_root)
         # Should fall back to default settings
@@ -210,7 +210,6 @@ class TestConfigManager(unittest.TestCase):
         self.assertFalse((self.user_config_dir / "test.json").exists())
         self.assertFalse(list(self.user_config_dir.glob("*.tmp")))
 
-
     def test_merge_defaults_handles_invalid_default_json(self):
         """Invalid default settings during merging should be logged, not raised."""
         (self.user_config_dir / "settings.json").write_text(
@@ -219,46 +218,34 @@ class TestConfigManager(unittest.TestCase):
         (self.default_dir / "settings.json").write_text("{invalid json")
 
         with self.assertLogs(level="ERROR") as logs:
-            cm = stockstui.config_manager.ConfigManager(
-                app_root=self.app_root
-            )
+            cm = stockstui.config_manager.ConfigManager(app_root=self.app_root)
 
         self.assertEqual(cm.settings["theme"], "user_theme")
         self.assertTrue(
             any(
-                "Failed to merge default settings" in message
-                for message in logs.output
+                "Failed to merge default settings" in message for message in logs.output
             )
         )
 
-    def test_corrupted_file_backup_failure_still_restores_default(self):
-        """A failed backup must not prevent restoration from defaults."""
+    def test_corrupted_file_backup_failure_keeps_original_and_safe_memory(self):
         settings_path = self.user_config_dir / "settings.json"
-        settings_path.write_text("{broken json")
-
-        original_replace = stockstui.config_manager.os.replace
-
-        def replace_side_effect(source, destination):
-            if str(destination).endswith(".bak"):
-                raise OSError("backup failed")
-            return original_replace(source, destination)
-
-        with patch(
-            "stockstui.config_manager.os.replace",
-            side_effect=replace_side_effect,
-        ), self.assertLogs(level="ERROR") as logs:
-            cm = stockstui.config_manager.ConfigManager(
-                app_root=self.app_root
-            )
-
-        self.assertEqual(
-            cm.settings["theme"],
-            self.default_settings["theme"],
-        )
+        original = "{broken json"
+        settings_path.write_text(original)
+        with (
+            patch.object(
+                stockstui.config_manager.ConfigManager,
+                "_backup_original",
+                side_effect=OSError("backup failed"),
+            ),
+            self.assertLogs(level="ERROR") as logs,
+        ):
+            cm = stockstui.config_manager.ConfigManager(app_root=self.app_root)
+        self.assertEqual(cm.settings["theme"], self.default_settings["theme"])
+        self.assertEqual(settings_path.read_text(), original)
+        self.assertIn("settings.json", cm._protected_files)
         self.assertTrue(
             any(
-                "Could not back up corrupted file" in message
-                for message in logs.output
+                "Could not back up corrupted file" in message for message in logs.output
             )
         )
 
@@ -278,10 +265,7 @@ class TestConfigManager(unittest.TestCase):
 
         self.assertEqual(result, {})
         self.assertTrue(
-            any(
-                "Failed to create user config" in message
-                for message in logs.output
-            )
+            any("Failed to create user config" in message for message in logs.output)
         )
 
     def test_missing_default_file_returns_empty_dict(self):
@@ -331,9 +315,7 @@ class TestConfigManager(unittest.TestCase):
         cm = stockstui.config_manager.ConfigManager.__new__(
             stockstui.config_manager.ConfigManager
         )
-        cm.portfolios = {
-            "portfolios": {"default": {"tickers": []}}
-        }
+        cm.portfolios = {"portfolios": {"default": {"tickers": []}}}
         cm.lists = {
             "stocks": [
                 {"name": "Missing ticker"},
@@ -344,9 +326,7 @@ class TestConfigManager(unittest.TestCase):
         with patch.object(cm, "save_portfolios") as save_mock:
             cm._migrate_stocks_to_default_portfolio()
 
-        self.assertTrue(
-            cm.portfolios["settings"]["migration_completed"]
-        )
+        self.assertTrue(cm.portfolios["settings"]["migration_completed"])
         self.assertEqual(
             cm.portfolios["portfolios"]["default"]["tickers"],
             [],
