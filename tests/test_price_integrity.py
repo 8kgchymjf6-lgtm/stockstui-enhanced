@@ -273,5 +273,5 @@ class TestPortfolioIntegrity(unittest.TestCase):
                 return cls(2026,1,1,12,tzinfo=timezone.utc).astimezone(tz)
         with patch.object(portfolios.datetime,'datetime',Clock):
             key=self.manager.create_portfolio('UTC')
-        stamp=datetime.fromisoformat(self.manager.get_portfolio(key)['created'])
+        stamp=datetime.fromisoformat(self.manager.get_portfolio(key)['created'].replace('Z', '+00:00'))
         self.assertEqual(stamp,datetime(2026,1,1,12,tzinfo=timezone.utc))

@@ -52,8 +52,9 @@ quote audit and subsequent failure-path reviews.
 - Harden installation/test scripts and enforce test and coverage failure statuses.
   GitHub CI covers Python 3.10–3.14; its workflow run records the matrix result.
 
-The release preparation changes metadata/documentation only after the measured
-local build. Passing tests and coverage do not guarantee absence of all defects.
+The release preparation changes metadata/documentation and makes one UTC timestamp
+assertion compatible with Python 3.10. Production code is unchanged from the
+measured local build. Passing tests and coverage do not guarantee absence of all defects.
 See [STABILITY.md](STABILITY.md) for details and historical local validation.
 
 ---

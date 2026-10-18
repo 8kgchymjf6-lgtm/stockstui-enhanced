@@ -4,9 +4,10 @@ Updated: 2026-10-18. Enhanced release: `v1.0.4-enhanced`.
 Package version: `1.0.4`, based on upstream b14.
 
 The release promotes local stability build `0.1.0b14+enhanced.20261018.4`.
-Production Python files, package resources and tests are byte-identical to that
-fully measured build; this release preparation updates version metadata and
-documentation. Historical build results below retain their original scope.
+Production Python files and package resources are byte-identical to that fully
+measured build. Release preparation updates version metadata/documentation and
+makes one UTC timestamp assertion portable to Python 3.10, retaining its exact
+expected value. Historical build results below retain their original scope.
 
 GitHub Actions runs critical Ruff, full-package mypy and the coverage-gated suite
 on Python 3.10–3.14. The associated workflow run records the actual outcome of
