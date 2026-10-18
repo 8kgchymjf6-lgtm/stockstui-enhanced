@@ -112,21 +112,27 @@ class OptionsDataUpdated(Message):
         calls_data,
         puts_data,
         underlying: dict | None,
+        request_id: int = 0,
+        error: str | None = None,
     ) -> None:
         self.ticker = ticker
         self.expiration = expiration
         self.calls_data = calls_data  # pandas DataFrame
         self.puts_data = puts_data  # pandas DataFrame
         self.underlying = underlying
+        self.request_id = request_id
+        self.error = error
         super().__init__()
 
 
 class OptionsExpirationsUpdated(Message):
     """Posted when available expiration dates for a ticker have been fetched."""
 
-    def __init__(self, ticker: str, expirations: tuple[str, ...]) -> None:
+    def __init__(self, ticker: str, expirations: tuple[str, ...], request_id: int = 0, error: str | None = None) -> None:
         self.ticker = ticker
         self.expirations = expirations
+        self.request_id = request_id
+        self.error = error
         super().__init__()
 
 

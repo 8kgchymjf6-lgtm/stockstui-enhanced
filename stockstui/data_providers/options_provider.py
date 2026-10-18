@@ -7,6 +7,10 @@ import time
 import yfinance as yf
 from typing import Any
 import datetime
+from copy import deepcopy
+from threading import RLock
+import pandas as pd
+import math
 from stockstui.utils import black_scholes
 
 
@@ -14,6 +18,62 @@ from stockstui.utils import black_scholes
 _options_cache: dict[str, dict[str, Any]] = {}
 _expirations_cache: dict[str, dict[str, Any]] = {}
 OPTIONS_CACHE_TTL = 600  # 10 minutes in seconds
+
+
+_cache_lock = RLock()
+_cache_versions: dict[tuple[str, str], object] = {}
+
+
+def _begin_request(cache, key, use_cache):
+    namespace = "chain" if cache is _options_cache else "expirations"
+    with _cache_lock:
+        entry = cache.get(key)
+        if use_cache and _is_cache_valid(entry):
+            return deepcopy(entry["data"]), None
+        token = object()
+        _cache_versions[namespace, key] = token
+        return None, token
+
+
+def _publish(cache, key, token, data):
+    namespace = "chain" if cache is _options_cache else "expirations"
+    with _cache_lock:
+        if _cache_versions.get((namespace, key)) is token:
+            cache[key] = {"data": deepcopy(data), "timestamp": time.time()}
+
+
+def normalize_options_data(data):
+    """Preserve usable rows while making partial provider responses safe to display."""
+    if not isinstance(data, dict):
+        raise ValueError("Options response must be an object")
+    result = data.copy()
+    underlying = data.get("underlying")
+    result["underlying"] = underlying.copy() if isinstance(underlying, dict) else {}
+    for side in ("calls", "puts"):
+        frame = data.get(side)
+        if frame is None:
+            frame = pd.DataFrame()
+        if not isinstance(frame, pd.DataFrame):
+            raise ValueError(f"Invalid {side} options data")
+        frame = frame.copy()
+        if not frame.empty:
+            if "strike" not in frame or "contractSymbol" not in frame:
+                frame = frame.iloc[:0]
+            else:
+                for column in ("strike", "lastPrice", "bid", "ask", "percentChange", "volume", "openInterest", "impliedVolatility", "delta", "gamma", "theta", "vega"):
+                    if column not in frame:
+                        frame[column] = float("nan")
+                    frame[column] = pd.to_numeric(frame[column], errors="coerce").astype(float)
+                    frame[column] = frame[column].where(frame[column].map(math.isfinite))
+                valid_symbol = frame["contractSymbol"].map(lambda x: isinstance(x, str) and bool(x.strip()))
+                frame = frame[valid_symbol & frame["strike"].notna() & (frame["strike"] >= 0)]
+                frame = frame.drop_duplicates("contractSymbol")
+        if frame.empty:
+            # The chart still indexes these columns when the other side has rows.
+            for column in ("strike", "openInterest"):
+                frame[column] = pd.Series(dtype=float)
+        result[side] = frame.reset_index(drop=True)
+    return result
 
 
 def _is_cache_valid(cache_entry: dict) -> bool:
@@ -30,22 +90,20 @@ def clear_options_cache(ticker: str | None = None):
     Args:
         ticker: Optional ticker symbol to clear specific cache, or None to clear all
     """
-    global _options_cache, _expirations_cache
-
-    if ticker:
-        ticker_upper = ticker.upper()
-        # Clear expirations (exact match)
-        _expirations_cache.pop(ticker_upper, None)
-
-        # Clear options chains (prefix match)
-        keys_to_remove = [
-            k for k in _options_cache.keys() if k.startswith(ticker_upper)
-        ]
-        for k in keys_to_remove:
-            _options_cache.pop(k, None)
-    else:
-        _options_cache.clear()
-        _expirations_cache.clear()
+    with _cache_lock:
+        if ticker:
+            ticker_upper = ticker.upper()
+            _expirations_cache.pop(ticker_upper, None)
+            for key in list(_options_cache):
+                if key.startswith(ticker_upper + "_"):
+                    _options_cache.pop(key, None)
+            for namespace, key in list(_cache_versions):
+                if (namespace == "expirations" and key == ticker_upper) or (namespace == "chain" and key.startswith(ticker_upper + "_")):
+                    _cache_versions.pop((namespace, key), None)
+        else:
+            _options_cache.clear()
+            _expirations_cache.clear()
+            _cache_versions.clear()
 
 
 def get_available_expirations(
@@ -64,12 +122,9 @@ def get_available_expirations(
     ticker_upper = ticker_symbol.upper()
     cache_key = ticker_upper
 
-    # Check cache first
-    if use_cache and cache_key in _expirations_cache:
-        cache_entry = _expirations_cache[cache_key]
-        if _is_cache_valid(cache_entry):
-            logging.debug(f"Using cached expirations for {ticker_upper}")
-            return cache_entry.get("data")
+    cached, token = _begin_request(_expirations_cache, cache_key, use_cache)
+    if token is None:
+        return cached
 
     try:
         ticker = yf.Ticker(ticker_symbol)
@@ -77,10 +132,7 @@ def get_available_expirations(
 
         if expirations:
             # Cache the result
-            _expirations_cache[cache_key] = {
-                "data": expirations,
-                "timestamp": time.time(),
-            }
+            _publish(_expirations_cache, cache_key, token, expirations)
             return expirations
         return None
     except Exception as e:
@@ -163,19 +215,17 @@ def get_options_chain(
     ticker_upper = ticker_symbol.upper()
     cache_key = f"{ticker_upper}_{expiration_date or 'nearest'}"
 
-    # Check cache first
-    if use_cache and cache_key in _options_cache:
-        cache_entry = _options_cache[cache_key]
-        if _is_cache_valid(cache_entry):
-            logging.debug(f"Using cached options chain for {cache_key}")
-            return cache_entry.get("data")
+    cached, token = _begin_request(_options_cache, cache_key, use_cache)
+    if token is None:
+        return cached
 
     try:
         ticker = yf.Ticker(ticker_symbol)
         options_chain = ticker.option_chain(date=expiration_date)
 
         # Get underlying price
-        underlying = options_chain.underlying or {}
+        underlying = options_chain.underlying
+        underlying = underlying if isinstance(underlying, dict) else {}
         underlying_price = underlying.get("regularMarketPrice")
 
         # If expiration_date is None (nearest), we need to know what it is for Greek calc
@@ -201,15 +251,15 @@ def get_options_chain(
                 puts_df, underlying_price, calc_date, "p"
             )
 
-        result = {
+        result = normalize_options_data({
             "calls": calls_df,
             "puts": puts_df,
-            "underlying": options_chain.underlying,
-            "expiration": calc_date,  # Store the date used
-        }
+            "underlying": underlying,
+            "expiration": calc_date,
+        })
 
         # Cache the result
-        _options_cache[cache_key] = {"data": result, "timestamp": time.time()}
+        _publish(_options_cache, cache_key, token, result)
 
         return result
     except ValueError as e:

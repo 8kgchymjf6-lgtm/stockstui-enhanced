@@ -2,6 +2,7 @@ import requests
 import logging
 import numpy as np
 from datetime import datetime, timezone
+from calendar import monthrange
 from typing import Optional, Dict, List, Any
 
 BASE_URL = "https://api.stlouisfed.org/fred"
@@ -407,9 +408,9 @@ def get_series_summary(series_id: str, api_key: str) -> Dict[str, Any]:
             except ValueError:
                 continue
 
-        # Helper to find closest date (looking back) using binary search (bisect)
+        # Find the nearest reference within 45 days; ties prefer the earlier date.
         # to avoid linear scans and redundant strptime parsing.
-        def find_closest_past(target_date):
+        def find_closest_reference(target_date):
             if not parsed_dates_asc:
                 return None
             import bisect
@@ -430,8 +431,10 @@ def get_series_summary(series_id: str, api_key: str) -> Dict[str, Any]:
 
         # 1 Year Ago
         current_date_obj = datetime.strptime(current_obs["date"], "%Y-%m-%d")
-        target_1y = current_date_obj.replace(year=current_date_obj.year - 1)
-        obs_1y = find_closest_past(target_1y)
+        # Clamp Feb 29 to Feb 28 in a non-leap reference year.
+        year_1y = current_date_obj.year - 1
+        target_1y = current_date_obj.replace(year=year_1y, day=min(current_date_obj.day, monthrange(year_1y, current_date_obj.month)[1]))
+        obs_1y = find_closest_reference(target_1y)
         if obs_1y and summary["current"] != "N/A":
             try:
                 if obs_1y["value"] != ".":
@@ -442,8 +445,9 @@ def get_series_summary(series_id: str, api_key: str) -> Dict[str, Any]:
                 logging.debug(f"Could not parse 1Y ago value for {series_id}: {e}")
 
         # 5 Year Ago
-        target_5y = current_date_obj.replace(year=current_date_obj.year - 5)
-        obs_5y = find_closest_past(target_5y)
+        year_5y = current_date_obj.year - 5
+        target_5y = current_date_obj.replace(year=year_5y, day=min(current_date_obj.day, monthrange(year_5y, current_date_obj.month)[1]))
+        obs_5y = find_closest_reference(target_5y)
         if obs_5y and summary["current"] != "N/A":
             try:
                 if obs_5y["value"] != ".":

@@ -1,4 +1,4 @@
-from stockstui.common import PriceDataUpdated, HistoricalDataUpdated
+from stockstui.common import PriceDataUpdated, HistoricalDataUpdated, OptionsDataUpdated, OptionsExpirationsUpdated
 import unittest
 import webbrowser
 from datetime import datetime, timedelta, timezone
@@ -1344,7 +1344,7 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
         worker = MagicMock()
         worker.is_cancelled = False
 
-        method = StocksTUI.fetch_options_expirations.__wrapped__
+        method = StocksTUI._fetch_options_expirations.__wrapped__
 
         with (
             patch(
@@ -1391,7 +1391,7 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
         worker = MagicMock()
         worker.is_cancelled = False
 
-        method = StocksTUI.fetch_options_chain.__wrapped__
+        method = StocksTUI._fetch_options_chain.__wrapped__
 
         options_data = {
             "calls": ["call"],
@@ -1421,11 +1421,8 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
         ):
             method(app, "AAPL", "2027-01-15")
 
-        self.assertEqual(
-            app._last_options_data,
-            {"error": "Could not fetch options data for AAPL"},
-        )
-        app.post_message.assert_not_called()
+        self.assertIsNone(app._last_options_data)
+        self.assertEqual(app.post_message.call_args.args[0].error, "Could not fetch options data for AAPL")
 
         with (
             patch(
@@ -1438,7 +1435,8 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
             method(app, "AAPL", "2027-01-15")
 
         log_error.assert_called_once()
-        self.assertEqual(app._last_options_data, {"error": "chain error"})
+        self.assertIsNone(app._last_options_data)
+        self.assertEqual(app.post_message.call_args.args[0].error, "chain error")
 
     def test_debug_workers_post_results(self):
         app = create_mocked_app()
@@ -1789,11 +1787,11 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
         app = create_mocked_app()
         app.options_ticker = "AAPL"
 
-        message = MagicMock()
-        message.ticker = "AAPL"
-        message.expirations = ("2027-01-15", "2027-02-19")
+        app._options_expirations_ticker = "AAPL"
+        message = OptionsExpirationsUpdated("AAPL", ("2027-01-15", "2027-02-19"))
 
         options_view = MagicMock()
+        options_view._render_options_data = AsyncMock()
 
         with (
             patch.object(app, "get_active_category", return_value="options"),
@@ -1820,11 +1818,11 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(app, "get_active_category", return_value="news"),
-            patch.object(app, "query_one") as query_one,
+            patch.object(app, "query_one", return_value=options_view),
         ):
             await app.on_options_expirations_updated(message)
 
-        query_one.assert_not_called()
+        options_view.update_expirations.assert_called_once_with([])
 
         message.ticker = "MSFT"
         with (
@@ -1845,16 +1843,14 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
     async def test_options_data_updated_paths(self):
         app = create_mocked_app()
 
-        message = MagicMock()
-        message.ticker = "AAPL"
-        message.expiration = "2027-01-15"
-        message.calls_data = ["call"]
-        message.puts_data = ["put"]
-        message.underlying = 200.0
+        app.options_ticker = "AAPL"
+        app._options_request_key = ("AAPL", "2027-01-15")
+        message = OptionsDataUpdated("AAPL", "2027-01-15", ["call"], ["put"], 200.0)
 
         display_container = MagicMock()
         options_view = MagicMock()
         options_view._render_options_data = AsyncMock()
+        options_view.query_one.return_value.value = "2027-01-15"
 
         def query_side_effect(selector, *args):
             if selector == "#options-display-container":
@@ -1898,7 +1894,7 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
         with patch.object(app, "query_one", side_effect=missing_view):
             await app.on_options_data_updated(message)
 
-        self.assertIsNotNone(app._last_options_data)
+        self.assertIsNone(app._last_options_data)
 
     async def test_news_data_updated_success_error_and_visibility(self):
         app = create_mocked_app()

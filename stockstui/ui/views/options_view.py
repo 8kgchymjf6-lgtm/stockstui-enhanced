@@ -18,7 +18,7 @@ from textual.binding import Binding
 from stockstui.ui.suggesters import TickerSuggester
 from stockstui.ui.position_modal import PositionModal
 from stockstui.ui.widgets.oi_chart import OIChart
-from stockstui.data_providers import market_provider
+from stockstui.data_providers import market_provider, options_provider
 from stockstui.presentation.formatter import get_currency_symbol
 
 
@@ -116,9 +116,14 @@ class OptionsView(Vertical):
                 await display_container.mount(Static(error_text))
                 return
 
-            calls_df = last_data.get("calls")
-            puts_df = last_data.get("puts")
-            underlying_data = last_data.get("underlying", {})
+            try:
+                normalized = options_provider.normalize_options_data(last_data)
+            except (ValueError, TypeError):
+                await display_container.mount(Static("Could not process options data. Retry the request."))
+                return
+            calls_df = normalized["calls"]
+            puts_df = normalized["puts"]
+            underlying_data = normalized["underlying"]
 
             if (
                 calls_df is None
@@ -134,11 +139,17 @@ class OptionsView(Vertical):
                 return
 
             # Get underlying price for ITM/OTM calculations
-            underlying_price = underlying_data.get("regularMarketPrice", 0)
+            underlying_price = underlying_data.get("regularMarketPrice")
+            try:
+                underlying_price = float(underlying_price)
+                if not math.isfinite(underlying_price) or underlying_price <= 0:
+                    underlying_price = 0
+            except (TypeError, ValueError, OverflowError):
+                underlying_price = 0
 
-            # Resolve currency code from underlying info cache or provider
-            info = market_provider.get_ticker_info(self.app.options_ticker) if self.app.options_ticker else None
-            currency_code = info.get("currency", "USD") if info else "USD"
+            # Rendering must not block the UI on a second metadata request.
+            info = market_provider.get_info_cache_state().get(self.app.options_ticker, {})
+            currency_code = underlying_data.get("currency") or info.get("currency") or "USD"
             sym = get_currency_symbol(currency_code)
 
             # Calculate days to expiration
@@ -150,7 +161,7 @@ class OptionsView(Vertical):
                 days_to_exp = None
 
             # Create info header
-            info_text = f"Underlying: {sym}{underlying_price:.2f}"
+            info_text = f"Underlying: {sym}{underlying_price:.2f}" if underlying_price else "Underlying: unavailable"
             if days_to_exp is not None:
                 info_text += f"  |  Days to Expiration: {days_to_exp}"
             info_header = Static(info_text, classes="options-info-header")
@@ -161,6 +172,15 @@ class OptionsView(Vertical):
             error_color = self.app.theme_variables.get("error", "red")
             muted_color = self.app.theme_variables.get("text-muted", "dim")
             accent_color = self.app.theme_variables.get("accent", "blue")
+
+            def number(value, spec, prefix="", suffix=""):
+                try:
+                    value = float(value)
+                    if math.isfinite(value):
+                        return prefix + format(value, spec) + suffix
+                except (ValueError, TypeError, OverflowError):
+                    pass
+                return "—"
 
             # Helper to create table
             def create_table(df, table_id, label_text, is_call):
@@ -216,13 +236,13 @@ class OptionsView(Vertical):
                         strike_text.stylize(f"bold {accent_color} reverse")
 
                     last_price = row.get("lastPrice", 0)
-                    last_text = f"{sym}{last_price:.2f}"
-                    bid = f"{sym}{row.get('bid', 0):.2f}"
-                    ask = f"{sym}{row.get('ask', 0):.2f}"
+                    last_text = number(last_price, ".2f", sym)
+                    bid = number(row.get("bid"), ".2f", sym)
+                    ask = number(row.get("ask"), ".2f", sym)
 
                     # % Change
                     pct_change_val = row.get("percentChange", 0)
-                    pct_change_text = Text(f"{pct_change_val:.1f}%")
+                    pct_change_text = Text(number(pct_change_val, ".1f", suffix="%"))
                     if pct_change_val > 0:
                         pct_change_text.stylize(success_color)
                     elif pct_change_val < 0:
@@ -230,29 +250,13 @@ class OptionsView(Vertical):
                     else:
                         pct_change_text.stylize(muted_color)
 
-                    # Handle NaN values for volume and openInterest
-                    volume_val = row.get("volume", 0)
-                    oi_val = row.get("openInterest", 0)
-
-                    volume = (
-                        f"{int(volume_val):,}"
-                        if not (
-                            isinstance(volume_val, float) and math.isnan(volume_val)
-                        )
-                        else "—"
-                    )
-                    open_interest = (
-                        f"{int(oi_val):,}"
-                        if not (isinstance(oi_val, float) and math.isnan(oi_val))
-                        else "—"
-                    )
-                    iv = f"{row.get('impliedVolatility', 0):.2%}"
-
-                    # Greeks
-                    delta = f"{row.get('delta', 0):.2f}"
-                    gamma = f"{row.get('gamma', 0):.3f}"
-                    theta = f"{row.get('theta', 0):.3f}"
-                    vega = f"{row.get('vega', 0):.3f}"
+                    volume = number(row.get("volume"), ",.0f")
+                    open_interest = number(row.get("openInterest"), ",.0f")
+                    iv = number(row.get("impliedVolatility"), ".2%")
+                    delta = number(row.get("delta"), ".2f")
+                    gamma = number(row.get("gamma"), ".3f")
+                    theta = number(row.get("theta"), ".3f")
+                    vega = number(row.get("vega"), ".3f")
 
                     # Position Data
                     pos_text = ""
@@ -266,7 +270,7 @@ class OptionsView(Vertical):
                         # P/L = (Current Price - Avg Cost) * Qty * 100
                         current_val = last_price
                         pl_val = (current_val - avg_cost) * qty * 100
-                        pl_text = Text(f"{sym}{pl_val:,.0f}")
+                        pl_text = Text(number(pl_val, ",.0f", sym))
                         if pl_val > 0:
                             pl_text.stylize(success_color)
                         elif pl_val < 0:
@@ -348,6 +352,7 @@ class OptionsView(Vertical):
                     select.value = options[0][1]
             else:
                 select.set_options([("No options available", "")])
+                select.value = ""
                 select.disabled = True
         except NoMatches:
             pass
@@ -438,9 +443,16 @@ class OptionsView(Vertical):
         if not self.app.options_ticker:
             return
 
-        # Disable expiration selector while loading
+        # Reset queued selection events before fetching the new ticker's dates.
         try:
-            self.query_one("#options-expiration-select", Select).disabled = True
+            select = self.query_one("#options-expiration-select", Select)
+            with self.prevent(Select.Changed):
+                select.set_options([("Loading expirations", "")])
+                select.value = ""
+                select.disabled = True
+            container = self.query_one("#options-display-container")
+            container.loading = True
+            self.call_after_refresh(self._render_options_data)
         except NoMatches:
             pass
 
@@ -453,7 +465,7 @@ class OptionsView(Vertical):
 
         try:
             expiration_select = self.query_one("#options-expiration-select", Select)
-            if expiration_select.value and expiration_select.value != "":
+            if not expiration_select.disabled and isinstance(expiration_select.value, str) and expiration_select.value != "":
                 display_container = self.query_one("#options-display-container")
                 display_container.loading = True
                 self.app.fetch_options_chain(
@@ -478,5 +490,7 @@ class OptionsView(Vertical):
     @on(Select.Changed, "#options-expiration-select")
     def on_expiration_changed(self, event: Select.Changed):
         """Handles changes in the expiration selector, triggering options chain fetch."""
-        if event.value and event.value != "":
-            self._request_options_chain()
+        if isinstance(event.value, str) and event.value != "":
+            select = self.query_one("#options-expiration-select", Select)
+            if not select.disabled and event.value == select.value:
+                self._request_options_chain()

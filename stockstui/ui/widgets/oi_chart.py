@@ -83,9 +83,10 @@ class OIChart(PlotextPlot):
             max_active = max(active_strikes)
 
         # Ensure ATM is included in range
-        center = self._underlying_price
-        min_active = min(min_active, center * 0.95)
-        max_active = max(max_active, center * 1.05)
+        center = self._underlying_price or all_strikes[len(all_strikes) // 2]
+        if self._underlying_price:
+            min_active = min(min_active, center * 0.95)
+            max_active = max(max_active, center * 1.05)
 
         # Select strikes within this range
         candidates = [s for s in all_strikes if min_active <= s <= max_active]
@@ -166,9 +167,8 @@ class OIChart(PlotextPlot):
             ],
         )
 
-        plt.title(
-            f"Open Interest by Strike for {self._ticker} (Near {self._currency_symbol}{self._underlying_price:.2f})"
-        )
+        reference = f"Near {self._currency_symbol}{self._underlying_price:.2f}" if self._underlying_price else "underlying unavailable"
+        plt.title(f"Open Interest by Strike for {self._ticker} ({reference})")
         plt.xlabel("Strike Price")
         plt.ylabel("Open Interest")
 

@@ -224,6 +224,12 @@ class StocksTUI(App):
         self._history_request_key: tuple[str, str, str] | None = None
         self._current_history_worker: Worker | None = None
         self._history_interval = "1d"
+        self._options_request_serial = 0
+        self._options_request_key: tuple[str, str] | None = None
+        self._current_options_worker: Worker | None = None
+        self._options_expirations_serial = 0
+        self._options_expirations_ticker: str | None = None
+        self._current_expirations_worker: Worker | None = None
 
         # Initialize the last_key attribute. This ensures it always exists.
         self.last_key: events.Key | None = None
@@ -1453,45 +1459,85 @@ class StocksTUI(App):
         if not self._closing and not get_current_worker().is_cancelled:
             self.post_message(HistoricalDataUpdated(data, ticker, period, interval, request_id))
 
-    @work(exclusive=True, thread=True, group="fetch_options_expirations")
     def fetch_options_expirations(self, ticker: str):
-        """Worker to fetch available expiration dates for a ticker's options."""
+        """Invalidate the old chain as soon as a ticker's expirations are requested."""
+        if self._closing:
+            return None
+        self._options_expirations_serial += 1
+        self._options_expirations_ticker = ticker
+        self._options_request_serial += 1
+        self._options_request_key = None
+        self._last_options_data = None
+        if self._current_options_worker:
+            self._current_options_worker.cancel()
+        worker = self._fetch_options_expirations(ticker, self._options_expirations_serial)
+        self._current_expirations_worker = worker
+        return worker
+
+    @work(exclusive=True, thread=True, group="fetch_options_expirations")
+    def _fetch_options_expirations(self, ticker: str, request_id: int = 0):
+        if self._closing or get_current_worker().is_cancelled:
+            return
+        error = None
         try:
             expirations = options_provider.get_available_expirations(ticker)
-            if not get_current_worker().is_cancelled:
-                self.post_message(OptionsExpirationsUpdated(ticker, expirations or ()))
         except Exception as e:
             logging.error(f"Worker fetch_options_expirations failed for {ticker}: {e}")
-            if not get_current_worker().is_cancelled:
-                self.post_message(OptionsExpirationsUpdated(ticker, ()))
+            expirations = ()
+            error = str(e) or type(e).__name__
+        if not self._closing and not get_current_worker().is_cancelled:
+            self.post_message(OptionsExpirationsUpdated(ticker, expirations or (), request_id, error))
+
+    def fetch_options_chain(self, ticker: str, expiration: str):
+        if self._closing:
+            return None
+        key = (ticker, expiration)
+        if key != self._options_request_key:
+            self._last_options_data = None
+        self._options_request_key = key
+        self._options_request_serial += 1
+        worker = self._fetch_options_chain(ticker, expiration, self._options_request_serial)
+        self._current_options_worker = worker
+        return worker
 
     @work(exclusive=True, thread=True, group="fetch_options_chain")
-    def fetch_options_chain(self, ticker: str, expiration: str):
-        """Worker to fetch options chain data for a ticker and expiration date."""
+    def _fetch_options_chain(self, ticker: str, expiration: str, request_id: int = 0):
+        if self._closing or get_current_worker().is_cancelled:
+            return
+        error = None
+        data = {}
         try:
-            options_data = options_provider.get_options_chain(ticker, expiration)
-            if not get_current_worker().is_cancelled:
-                if options_data:
-                    self.post_message(
-                        OptionsDataUpdated(
-                            ticker,
-                            expiration,
-                            options_data.get("calls"),
-                            options_data.get("puts"),
-                            options_data.get("underlying"),
-                        )
-                    )
-                else:
-                    # Post error
-                    self._last_options_data = {
-                        "error": f"Could not fetch options data for {ticker}"
-                    }
+            response = options_provider.get_options_chain(ticker, expiration)
+            if response is None:
+                raise ValueError(f"Could not fetch options data for {ticker}")
+            data = options_provider.normalize_options_data(response)
         except Exception as e:
-            logging.error(
-                f"Worker fetch_options_chain failed for {ticker} expiring {expiration}: {e}"
-            )
-            if not get_current_worker().is_cancelled:
-                self._last_options_data = {"error": str(e)}
+            logging.error(f"Worker fetch_options_chain failed for {ticker} expiring {expiration}: {e}")
+            error = str(e) or type(e).__name__
+        if not self._closing and not get_current_worker().is_cancelled:
+            self.post_message(OptionsDataUpdated(
+                ticker, expiration, data.get("calls"), data.get("puts"),
+                data.get("underlying"), request_id, error
+            ))
+
+    @on(Worker.StateChanged)
+    async def on_options_worker_state_changed(self, event: Worker.StateChanged):
+        if self._closing or event.state not in (WorkerState.CANCELLED, WorkerState.ERROR):
+            return
+        current = (
+            event.worker is self._current_options_worker and self._options_request_key is not None
+        ) or event.worker is self._current_expirations_worker
+        if not current:
+            return
+        try:
+            self.query_one("#options-display-container").loading = False
+            self._last_options_data = {"error": "Options request was cancelled or could not complete. Retry the request."}
+            view = self.query_one(OptionsView)
+            if event.worker is self._current_expirations_worker:
+                view.update_expirations([])
+            await view._render_options_data()
+        except NoMatches:
+            pass
 
     @work(exclusive=True, thread=True, group="run_info_comparison_test")
     def run_info_comparison_test(self, ticker: str):
@@ -2020,28 +2066,40 @@ class StocksTUI(App):
 
     @on(OptionsExpirationsUpdated)
     async def on_options_expirations_updated(self, message: OptionsExpirationsUpdated):
-        """Handles arrival of options expiration dates, populates the expiration selector."""
         if (
-            self.get_active_category() != "options"
+            self._closing
             or self.options_ticker != message.ticker
+            or message.ticker != self._options_expirations_ticker
+            or message.request_id != self._options_expirations_serial
         ):
             return
-
         try:
-            options_view = self.query_one(OptionsView)
+            view = self.query_one(OptionsView)
             expirations = list(message.expirations) if message.expirations else []
-            options_view.update_expirations(expirations)
+            view.update_expirations(expirations)
+            if not expirations:
+                self.query_one("#options-display-container").loading = False
+                self._last_options_data = {"error": message.error or f"No options expirations available for {message.ticker}. Retry if the connection failed."}
+                await view._render_options_data()
         except NoMatches:
             pass
 
     @on(OptionsDataUpdated)
     async def on_options_data_updated(self, message: OptionsDataUpdated):
-        """Handles arrival of options chain data, tells the options view to render it."""
+        if (
+            self._closing
+            or self.options_ticker != message.ticker
+            or message.request_id != self._options_request_serial
+            or (message.ticker, message.expiration) != self._options_request_key
+        ):
+            return
         try:
+            view = self.query_one(OptionsView)
+            if view.query_one("#options-expiration-select", Select).value != message.expiration:
+                return
             self.query_one("#options-display-container").loading = False
         except NoMatches:
             return
-
         self._last_options_data = {
             "ticker": message.ticker,
             "expiration": message.expiration,
@@ -2049,12 +2107,9 @@ class StocksTUI(App):
             "puts": message.puts_data,
             "underlying": message.underlying,
         }
-
-        try:
-            options_view = self.query_one(OptionsView)
-            await options_view._render_options_data()
-        except NoMatches:
-            pass
+        if message.error:
+            self._last_options_data["error"] = message.error
+        await view._render_options_data()
 
     @on(NewsDataUpdated)
     async def on_news_data_updated(self, message: NewsDataUpdated):

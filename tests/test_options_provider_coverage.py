@@ -279,7 +279,8 @@ class TestOptionsProvider(unittest.TestCase):
                 "2026-09-18",
             )
 
-        self.assertIs(result, cached_result)
+        self.assertEqual(result, cached_result)
+        self.assertIsNot(result, cached_result)
         mock_ticker.assert_not_called()
 
     @patch("stockstui.data_providers.options_provider.yf.Ticker")
