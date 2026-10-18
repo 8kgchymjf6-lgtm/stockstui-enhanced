@@ -151,7 +151,15 @@ class TestQuoteUI(unittest.IsolatedAsyncioTestCase):
             rows = [dict(symbol="AAPL", _stale=False, _fetched_at=STAMP, **quote_time_fields(STAMP, "quote")),
                     dict(symbol="BTC-USD", _stale=False, **quote_time_fields(STAMP, "bar_start")),
                     dict(symbol="MISSING", _stale=True)]
-            StocksTUI._show_quote_status(pilot.app, StocksTUI._quote_status(rows), rows)
-            tip = pilot.app.query_one(Label).tooltip.plain
+            label = pilot.app.query_one(Label)
+            with patch.object(label, "update", wraps=label.update) as update:
+                StocksTUI._show_quote_status(pilot.app, StocksTUI._quote_status(rows), rows)
+                compact = update.call_args.args[0].plain
+                self.assertLessEqual(len(compact), 64)
+                self.assertIn("Quote:", compact)
+                self.assertIn("Fetch:", compact)
+                self.assertIn("Unverified: 1", compact)
+                self.assertNotIn("AAPL", compact)
+            tip = label.tooltip.plain
             for text in ("AAPL: quote", "BTC-USD: 1m bar starts", "MISSING: quote time unknown", "fetched", "cached/unverified"):
                 self.assertIn(text, tip)
