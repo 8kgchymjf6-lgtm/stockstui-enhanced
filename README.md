@@ -87,6 +87,7 @@ A fast, minimalist terminal app for checking stock prices, crypto, news, and his
 ## 🛠 Requirements
 
 *   **Python** 3.10 or newer
+*   **Git** for the tagged source-install commands below; the release wheel can be installed without Git.
 *   **OS Support:**
 
     *   **Linux** — Release CI covers Python 3.10–3.14.
@@ -116,6 +117,9 @@ python3 -m pip install --user pipx
 python3 -m pipx ensurepath
 ```
 
+After `ensurepath`, open a new terminal if the `pipx` or `stockstui` command is
+not found.
+
 ### 2. Install stocksTUI:
 
 ```bash
@@ -124,6 +128,14 @@ pipx install "git+https://github.com/8kgchymjf6-lgtm/stockstui-enhanced.git@v1.0
 
 The package version and `stockstui --version` are `1.0.4`. This installs the
 enhanced fork explicitly from its release tag.
+
+To install without Git, download `stockstui-1.0.4-py3-none-any.whl` from the
+[release assets](https://github.com/8kgchymjf6-lgtm/stockstui-enhanced/releases/tag/v1.0.4-enhanced),
+then run this from the directory containing the downloaded file:
+
+```bash
+pipx install ./stockstui-1.0.4-py3-none-any.whl
+```
 
 To replace an existing stocksTUI installation with this release:
 

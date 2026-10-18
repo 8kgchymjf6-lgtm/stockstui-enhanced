@@ -1,6 +1,7 @@
 # Local
 __pycache__
 venv
+/.venv/
 run.sh
 *notes.md
 *.swp

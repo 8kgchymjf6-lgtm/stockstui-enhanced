@@ -99,7 +99,8 @@ Release type:
 
 - Test coverage, regression safety, and maintenance release
 
-Source-code statistics since v1.0.2-enhanced:
+Source-code statistics since v1.0.2-enhanced (Python code and tests; excludes
+the 87 added changelog lines):
 
 - 10,765 insertions
 - 18 deletions
@@ -128,8 +129,8 @@ Source-code statistics since v1.0.2-enhanced:
 
 - Increased total project coverage to 89.05%.
 - Increased `stockstui/main.py` coverage to 70.04%.
-- Expanded the test suite to 712 passing tests.
-- Improved branch coverage across data providers, views, widgets, configuration,
+- Expanded the test suite to 712 tests: 710 passed and 2 optional live checks skipped.
+- Expanded regression coverage across data providers, views, widgets, configuration,
   formatting, database, and application orchestration.
 - Improved isolation of network-dependent tests.
 - Improved test reliability across the supported Python versions.
@@ -158,13 +159,18 @@ Source-code statistics since v1.0.2-enhanced:
 
 # Release verification
 
-- Full test suite: 712 tests passed.
-- Expected skips: 2.
-- Ruff checks passed.
-- Ruff formatting checks passed.
-- Git whitespace checks passed.
+- Full test suite: **712 total: 710 passed, 2 optional live checks skipped**.
+- [Historical release CI](https://github.com/8kgchymjf6-lgtm/stockstui-enhanced/actions/runs/30911627037)
+  passed critical Ruff, mypy and the test workflow on Python **3.10–3.14**.
+- That workflow did not run a Ruff formatting check, and its mutation command
+  allowed failures. Those steps are not claimed as strict historical gates.
 - Total coverage: 89.05%.
 - `stockstui/main.py` coverage: 70.04%.
+
+The historical suite contains 712 discovered tests, including two live tests
+skipped by default. The previous wording counted all 712 as passed and then
+listed the skips separately; that count is corrected here. The coverage figures
+are the recorded release measurements, not a fresh measurement in this review.
 
 ---
 

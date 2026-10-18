@@ -55,6 +55,9 @@ Check compatibility and dependencies before choosing `--no-deps`; a fresh
 environment needs the normal dependency installation. Restart running application
 windows after an update. `--offline --no-deps` on the development installer is
 only suitable for an environment that already has dependencies and build tools.
+The current source checkout requires **setuptools 77.0.3 or newer** to parse the
+SPDX license expression and `license-files` metadata, following the
+[setuptools license-metadata guidance](https://setuptools.pypa.io/en/stable/userguide/license_migration.html).
 The Linux/Python 3.14 constraints snapshot supplements the portable project
 metadata; it is not a cross-platform lockfile.
 
