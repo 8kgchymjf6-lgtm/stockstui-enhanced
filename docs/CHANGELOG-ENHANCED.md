@@ -168,6 +168,59 @@ Source-code statistics since v1.0.2-enhanced:
 
 ---
 
+# v1.0.2-enhanced
+
+Release date:
+
+- 2026-08-02
+
+Base release:
+
+- stocksTUI v0.1.0-b14
+
+Previous enhanced release:
+
+- v1.0.1-enhanced
+
+Release type:
+
+- Numeric display, test maintenance, and CI compatibility release
+
+Changes since v1.0.1-enhanced:
+
+- 8 files changed
+- 33 insertions
+- 18 deletions
+
+Maintenance release focused on missing numeric values, regression checks, and CI compatibility.
+
+## Highlights
+
+- Rendered missing EPS, PE Ratio and Beta values as N/A, avoiding numeric conversion errors in the price table
+- Updated formatter tests for compact volumes, prices and price ranges, and isolated the startup-tab test from configured crypto tickers
+- Limited CI Ruff checks to critical errors and removed automatic source rewrites
+- Updated GitHub Actions checkout and setup-python to v6
+- Migrated mutmut configuration to source paths and explicit formatter-test selection
+- Improved the enhanced-edition README notice and Python bytecode cache exclusions
+- CI passes on Python 3.10–3.14
+
+## Release verification and scope
+
+- [Historical release CI](https://github.com/8kgchymjf6-lgtm/stockstui-enhanced/actions/runs/30760392719)
+  passed on Python **3.10, 3.11, 3.12, 3.13 and 3.14** for tagged commit
+  `ee998685dbb26d326bd99d7eb70a0296e07888a3`.
+- The runtime change handles `None` explicitly for EPS, PE Ratio and Beta before
+  numeric conversion, displaying missing values as `N/A`. The original short
+  release note described this only as mypy compatibility.
+- Formatter assertions were aligned with the already enhanced output; this
+  release did not introduce the earlier sorting and formatting features again.
+- This historical CI ran critical Ruff, mypy and the then-current test workflow.
+  Its mutation-test command allowed failures; it was not a strict mutation gate.
+  The current 1.0.4 test counts, coverage figures and coverage gate must not be
+  attributed to this older release.
+
+---
+
 # v1.0.0-enhanced
 
 Release date:
