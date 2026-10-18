@@ -5,9 +5,11 @@ from textual.validation import Validator, ValidationResult
 class PriceDataUpdated(Message):
     """Posted when price data has been updated."""
 
-    def __init__(self, data: list[dict], category: str) -> None:
+    def __init__(self, data: list[dict], category: str, request_id: int | None = None, error: str | None = None) -> None:
         self.data = data
         self.category = category
+        self.request_id = request_id
+        self.error = error
         super().__init__()
 
 

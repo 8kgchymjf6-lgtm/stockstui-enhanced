@@ -4,6 +4,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any
 import time
+from copy import deepcopy
+from threading import RLock
 import pandas as pd
 from stockstui.utils import merge_price_data
 
@@ -13,6 +15,25 @@ _price_cache: dict[str, dict[str, Any]] = {}
 _news_cache: dict[str, tuple[datetime, list[dict[str, Any]]]] = {}
 _info_cache: dict[str, dict[str, Any]] = {}
 _market_calendars: dict[str, Any] = {}
+
+_cache_lock = RLock()
+
+
+def _store_price(ticker, entry):
+    entry["data"]["_fetch_failed"] = bool(entry.get("fetch_failed"))
+    with _cache_lock:
+        _price_cache[ticker] = entry
+
+
+def _store_info(ticker, entry):
+    with _cache_lock:
+        _info_cache[ticker] = entry
+
+
+def _price_entry(ticker):
+    with _cache_lock:
+        return deepcopy(_price_cache.get(ticker))
+
 
 # Duration for which cached news is considered fresh.
 NEWS_CACHE_DURATION_SECONDS = 300  # 5 minutes
@@ -82,27 +103,33 @@ def _calculate_info_expiry(exchange_name: str) -> datetime:
 
 def populate_price_cache(initial_data: dict):
     global _price_cache
-    _price_cache.update(initial_data)
+    with _cache_lock:
+        _price_cache.update(deepcopy(initial_data))
     logging.info(f"In-memory price cache populated with {len(initial_data)} items.")
 
 
 def populate_info_cache(initial_data: dict):
     global _info_cache
-    _info_cache.update(initial_data)
+    with _cache_lock:
+        _info_cache.update(deepcopy(initial_data))
     logging.info(f"In-memory info cache populated with {len(initial_data)} items.")
 
 
 def get_price_cache_state() -> dict:
-    return _price_cache
+    with _cache_lock:
+        return deepcopy(_price_cache)
 
 
 def get_info_cache_state() -> dict:
-    return _info_cache
+    with _cache_lock:
+        return deepcopy(_info_cache)
 
 
 def get_market_price_data(
     tickers: list[str], force_refresh: bool = False, enable_pre_post_market: bool = False
 ) -> list[dict]:
+    price_cache = get_price_cache_state()
+    info_cache = get_info_cache_state()
     seen = set()
     valid_tickers = []
     for t in tickers:
@@ -120,14 +147,16 @@ def get_market_price_data(
     for ticker in valid_tickers:
         if (
             force_refresh
-            or ticker not in _price_cache
-            or now >= _price_cache[ticker].get("expiry", now)
+            or ticker not in price_cache
+            or now >= price_cache[ticker].get("expiry", now)
         ):
             slow_data_to_fetch.append(ticker)
 
-    # 2. Perform slow fetch. This populates _info_cache, which is needed for the next step.
+    # 2. Perform slow fetch. This populates info_cache, which is needed for the next step.
     if slow_data_to_fetch:
         _fetch_and_cache_slow_data(slow_data_to_fetch)
+        price_cache = get_price_cache_state()
+        info_cache = get_info_cache_state()
 
     # 3. Determine which tickers need a live intraday or pre/post (fast) fetch.
     # PERF: Batch market-status lookups by exchange.
@@ -135,7 +164,7 @@ def get_market_price_data(
     fast_data_to_fetch, prepost_data_to_fetch = [], []
 
     for ticker in valid_tickers:
-        info = _info_cache.get(ticker, {})
+        info = info_cache.get(ticker, {})
         if not info:
             continue
 
@@ -161,8 +190,8 @@ def get_market_price_data(
                         status.get("status") == "closed"
                         and (
                             force_refresh
-                            or ticker not in _price_cache
-                            or now >= _price_cache[ticker].get("expiry", now)
+                            or ticker not in price_cache
+                            or now >= price_cache[ticker].get("expiry", now)
                         )
                     )
                 )
@@ -179,26 +208,41 @@ def get_market_price_data(
     # Merge live price updates back into the cache to maintain a single source of truth.
     # This prevents data loss when switching tabs mid-session.
     if live_prices:
-        for ticker, fast_data_update in live_prices.items():
-            if ticker in _price_cache and "data" in _price_cache[ticker]:
-                existing_data = _price_cache[ticker]["data"]
-                merged_data = merge_price_data(existing_data, fast_data_update)
+        with _cache_lock:
+            for ticker, update in live_prices.items():
+                if ticker not in _price_cache or "data" not in _price_cache[ticker]:
+                    continue
+                merged = merge_price_data(_price_cache[ticker]["data"], update)
+                if update.get("price") is not None:
+                    merged["_fetched_at"] = datetime.now(timezone.utc).isoformat()
+                    merged["_fetch_failed"] = False
+                    _price_cache[ticker]["fetch_failed"] = False
+                if merged.get("shares") and merged.get("price"):
+                    merged["market_cap"] = merged["shares"] * merged["price"]
+                _price_cache[ticker]["data"] = merged
 
-                # ASSUMPTION: yf.download() OHLCV batch download doesn't return market cap.
-                # So we calculate the updated market cap by multiplying new price by cached shares.
-                shares = merged_data.get("shares")
-                price = merged_data.get("price")
-                if shares and price:
-                    merged_data["market_cap"] = shares * price
-
-                _price_cache[ticker]["data"] = merged_data
-
-    # Now that the cache is updated, construct the final list from it.
+    # Return copies: a renderer or a shutdown save must never iterate live caches.
+    attempted = set(fast_data_to_fetch + prepost_data_to_fetch)
+    successful_live = {ticker for ticker, update in live_prices.items() if update.get("price") is not None}
+    with _cache_lock:
+        for ticker in attempted - successful_live:
+            if ticker in _price_cache and isinstance(_price_cache[ticker].get("data"), dict):
+                _price_cache[ticker]["data"]["_fetch_failed"] = True
+                _price_cache[ticker]["fetch_failed"] = True
+    snapshot = get_price_cache_state()
     final_data = []
     for ticker in valid_tickers:
-        if ticker in _price_cache:
-            final_data.append(_price_cache[ticker].get("data", {}))
-
+        entry = snapshot.get(ticker)
+        if entry is not None:
+            row = entry.get("data", {}).copy()
+            row["_stale"] = bool(
+                entry.get("fetch_failed")
+                or row.get("_fetch_failed")
+                or (ticker in attempted and ticker not in successful_live)
+                or (ticker not in successful_live and now >= entry.get("expiry", now))
+                or not row.get("_fetched_at")
+            )
+            final_data.append(row)
     return final_data
 
 
@@ -211,8 +255,8 @@ def _fetch_and_cache_slow_data(tickers: list[str]):
     ThreadPoolExecutor, cutting wall-clock time from O(n * latency) to roughly
     O(latency) for typical list sizes.
 
-    Cache writes happen only after all futures complete so the module-level
-    dicts (_price_cache, _info_cache) are never touched from multiple threads.
+    Cache entries are published under a short lock after futures complete;
+    network requests never hold the cache lock.
 
     PERF: _calculate_info_expiry() is also memoised per exchange within the
     batch — the calendar schedule DataFrame is built once per exchange rather
@@ -243,21 +287,21 @@ def _fetch_and_cache_slow_data(tickers: list[str]):
     # schedule query runs once per exchange per batch instead of once per ticker.
     exchange_expiry_cache: dict[str, datetime] = {}
 
-    # Write to module-level caches sequentially (no concurrent access).
+    # Publish entries under the cache lock without holding it across network calls.
     # Preserve the original ticker order for predictability.
     for ticker in tickers:
         slow_info, fast_info = raw_results.get(ticker, (None, None))
         try:
             if slow_info and slow_info.get("currency"):
                 exchange = slow_info.get("exchange", "NYSE")
-                _info_cache[ticker] = {
+                _store_info(ticker, {
                     "currency": slow_info.get("currency"),
                     "exchange": exchange,
                     "shortName": slow_info.get("shortName"),
                     "longName": slow_info.get("longName"),
                     "quoteType": slow_info.get("quoteType"),
                     "hasPrePostMarketData": slow_info.get("hasPrePostMarketData", False),
-                }
+                })
                 if exchange not in exchange_expiry_cache:
                     exchange_expiry_cache[exchange] = _calculate_info_expiry(exchange)
                 # yfinance returns objects that behave like dicts but Mypy doesn't always recognize them
@@ -312,22 +356,25 @@ def _fetch_and_cache_slow_data(tickers: list[str]):
                     "all_time_high": si.get("allTimeHigh"),
                 }
 
-                existing_entry = _price_cache.get(ticker)
+                existing_entry = _price_entry(ticker)
                 if existing_entry and "data" in existing_entry:
                     merged_data = merge_price_data(existing_entry["data"], new_data)
                 else:
                     merged_data = new_data
 
-                _price_cache[ticker] = {
+                if new_data.get("price") is not None:
+                    merged_data["_fetched_at"] = datetime.now(timezone.utc).isoformat()
+                _store_price(ticker, {
                     "expiry": exchange_expiry_cache[exchange],
                     "data": merged_data,
-                }
+                    "fetch_failed": new_data.get("price") is None,
+                })
             else:
                 # If slow_info is None, it means _fetch_one caught an exception (fetch failed).
                 # If slow_info is a dict but has no currency, it's an invalid ticker.
                 # In either case, we merge or keep existing cached data to avoid N/A corruption on transient failures.
                 description = "Data Unavailable" if slow_info is None else "Invalid Ticker"
-                existing_entry = _price_cache.get(ticker)
+                existing_entry = _price_entry(ticker)
                 if existing_entry and "data" in existing_entry:
                     merged_data = existing_entry["data"].copy()
                     if "description" not in merged_data or merged_data["description"] in ("Data Unavailable", "Invalid Ticker"):
@@ -338,21 +385,21 @@ def _fetch_and_cache_slow_data(tickers: list[str]):
                 # If transient failure (slow_info is None), set short expiry so we retry later.
                 # If permanent failure (Invalid Ticker), cache for 1 day.
                 expiry_delta = timedelta(minutes=15) if slow_info is None else timedelta(days=1)
-                _price_cache[ticker] = {
+                _store_price(ticker, {**({
                     "expiry": datetime.now(timezone.utc) + expiry_delta,
                     "data": merged_data,
-                }
+                }), "fetch_failed": True})
         except Exception:
             logging.warning(f"Failed to cache slow data for {ticker}")
-            existing_entry = _price_cache.get(ticker)
+            existing_entry = _price_entry(ticker)
             if existing_entry and "data" in existing_entry:
                 merged_data = existing_entry["data"]
             else:
                 merged_data = {"symbol": ticker, "description": "Data Unavailable"}
-            _price_cache[ticker] = {
+            _store_price(ticker, {**({
                 "expiry": datetime.now(timezone.utc) + timedelta(minutes=15),
                 "data": merged_data,
-            }
+            }), "fetch_failed": True})
 
 
 def _fetch_fast_data(tickers: list[str], prepost: bool = False) -> dict:
@@ -457,23 +504,23 @@ def _fetch_fast_data(tickers: list[str], prepost: bool = False) -> dict:
 
 def get_ticker_info(ticker: str) -> dict | None:
     if ticker in _info_cache:
-        return _info_cache[ticker]
+        return get_info_cache_state()[ticker]
     try:
         info = yf.Ticker(ticker).info
         if not info or not info.get("currency"):
-            _info_cache[ticker] = {}
+            _store_info(ticker, {})
             return None
-        _info_cache[ticker] = {
+        _store_info(ticker, {
             "currency": info.get("currency"),
             "exchange": info.get("exchange"),
             "shortName": info.get("shortName"),
             "longName": info.get("longName"),
             "quoteType": info.get("quoteType"),
             "hasPrePostMarketData": info.get("hasPrePostMarketData", False),
-        }
-        return _info_cache[ticker]
+        })
+        return get_info_cache_state()[ticker]
     except Exception:
-        _info_cache[ticker] = {}
+        _store_info(ticker, {})
         return None
 
 
@@ -763,5 +810,9 @@ def is_cached(ticker: str) -> bool:
 
 
 def get_cached_price(ticker: str) -> dict | None:
-    entry = _price_cache.get(ticker.upper())
-    return entry.get("data") if entry else None
+    entry = _price_entry(ticker.upper())
+    if not isinstance(entry, dict) or not isinstance(entry.get("data"), dict):
+        return None
+    data = entry["data"].copy()
+    data["_stale"] = bool(entry.get("fetch_failed") or data.get("_fetch_failed") or not data.get("_fetched_at") or datetime.now(timezone.utc) >= entry.get("expiry", datetime.now(timezone.utc)))
+    return data

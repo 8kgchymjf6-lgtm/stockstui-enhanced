@@ -1,9 +1,12 @@
+from stockstui.ui.config_errors import config_errors
 from datetime import datetime, timezone
 from pathlib import Path
 import copy
 import json
 import logging
 import time
+import math
+from threading import Lock
 import re
 from typing import Union, Any
 import shutil
@@ -38,13 +41,13 @@ from textual.widgets.data_table import CellDoesNotExist, RowDoesNotExist
 from textual.coordinate import Coordinate
 from textual.widget import Widget
 from textual import on, work, events
-from textual.worker import get_current_worker
+from textual.worker import get_current_worker, Worker, WorkerState
 from rich.text import Text
 from rich.style import Style
 from textual.color import Color
 from platformdirs import PlatformDirs
 
-from stockstui.config_manager import ConfigManager
+from stockstui.config_manager import ConfigManager, ConfigSaveError
 from stockstui.common import (
     PriceDataUpdated,
     NewsDataUpdated,
@@ -115,6 +118,10 @@ BASE_THEME_STRUCTURE = {
         "scrollbar-hover": "$fg2",
     },
 }
+
+
+# Cancellation does not stop a thread: keep cache publications in request order.
+_price_fetch_lock = Lock()
 
 
 def substitute_colors(template: dict, palette: dict) -> dict:
@@ -208,6 +215,9 @@ class StocksTUI(App):
         """
         super().__init__()
         self.cli_overrides = cli_overrides or {}
+        self._closing = False
+        self._price_request_serial = 0
+        self._current_price_worker = None
 
         # Initialize the last_key attribute. This ensures it always exists.
         self.last_key: events.Key | None = None
@@ -277,7 +287,9 @@ class StocksTUI(App):
         self, symbol: str, ticker: str, quantity: float, avg_cost: float
     ):
         """Adds or updates an option position."""
-        self.db_manager.save_option_position(symbol, ticker, quantity, avg_cost)
+        if self.db_manager.save_option_position(symbol, ticker, quantity, avg_cost) is False:
+            self.notify("Position was not saved. Please retry.", severity="error")
+            return
         self.option_positions[symbol] = {
             "symbol": symbol,
             "ticker": ticker,
@@ -288,7 +300,9 @@ class StocksTUI(App):
 
     def remove_option_position(self, symbol: str):
         """Removes an option position."""
-        self.db_manager.delete_option_position(symbol)
+        if self.db_manager.delete_option_position(symbol) is False:
+            self.notify("Position was not removed. Please retry.", severity="error")
+            return
         if symbol in self.option_positions:
             del self.option_positions[symbol]
         self.notify(f"Position removed: {symbol}")
@@ -313,6 +327,7 @@ class StocksTUI(App):
                 yield Label("Last Refresh: Never", id="last-refresh-time")
         yield Footer()
 
+    @config_errors
     def on_mount(self) -> None:
         """
         Called when the app is first mounted.
@@ -405,7 +420,10 @@ class StocksTUI(App):
             if start_category in hidden_tabs:
                 hidden_tabs.remove(start_category)
                 self.config.settings["hidden_tabs"] = hidden_tabs
-                self.config.save_settings()
+                try:
+                    self.config.save_settings()
+                except ConfigSaveError as error:
+                    self.notify(str(error), title="Visibility change not saved", severity="error")
                 self._refresh_hidden_tabs()
                 self.notify(f"Auto-enabled '{start_category}' tab visibility.")
 
@@ -413,19 +431,23 @@ class StocksTUI(App):
         self.call_after_refresh(self._start_refresh_loops)
 
     def on_unmount(self) -> None:
-        """
-        Clean up background tasks and save all caches to the database on exit.
-        """
-        if self.price_refresh_timer:
-            self.price_refresh_timer.stop()
-        if self.market_status_timer:
-            self.market_status_timer.stop()
-
-        self.db_manager.save_price_cache_to_db(market_provider.get_price_cache_state())
-        self.db_manager.save_info_cache_to_db(market_provider.get_info_cache_state())
-        self.db_manager.close()
-
+        """Stop publishing results, save independent snapshots, and always close SQLite."""
+        self._closing = True
+        for timer in (self.price_refresh_timer, self.market_status_timer):
+            if timer:
+                timer.stop()
         self.workers.cancel_all()
+        try:
+            for save, snapshot in (
+                (self.db_manager.save_price_cache_to_db, market_provider.get_price_cache_state),
+                (self.db_manager.save_info_cache_to_db, market_provider.get_info_cache_state),
+            ):
+                try:
+                    save(snapshot())
+                except Exception:
+                    logging.exception("Could not persist optional market cache during shutdown")
+        finally:
+            self.db_manager.close()
 
     # region Event Handlers & Actions
     @on(events.Key)
@@ -481,8 +503,8 @@ class StocksTUI(App):
 
         # Priority 2: Dismiss the search box if it's active.
         try:
-            self.query_one(SearchBox).remove()
-            self._original_table_data = []
+            self.query_one(SearchBox)
+            self._dismiss_search()
             return
         except NoMatches:
             logging.debug("SearchBox not found during back action")
@@ -896,6 +918,8 @@ class StocksTUI(App):
         if self.config.get_setting("auto_refresh", False):
             try:
                 interval = float(self.config.get_setting("refresh_interval", 300.0))
+                if not math.isfinite(interval) or interval < 1:
+                    raise ValueError("Interval must be at least one second")
                 self.price_refresh_timer = self.set_interval(
                     interval, lambda: self.action_refresh(force=False)
                 )
@@ -903,6 +927,7 @@ class StocksTUI(App):
                     f"Auto-refresh timer started with interval of {interval} seconds."
                 )
             except (ValueError, TypeError):
+                self.notify("Auto refresh disabled: interval must be at least one second.", severity="error")
                 logging.error("Invalid refresh interval.")
         else:
             logging.info("Auto-refresh is disabled.")
@@ -1276,6 +1301,8 @@ class StocksTUI(App):
                     )
                     self._style_and_populate_price_table(price_table, rows)
                     self._apply_price_table_sort()
+                    self._refresh_search_snapshot(price_table)
+                    self._show_quote_status(self._quote_status(cached_data))
                 else:
                     price_table.clear()
                     price_table.loading = True
@@ -1289,31 +1316,56 @@ class StocksTUI(App):
                         enable_pre_post_market=enable_pre_post,
                     )
             else:
+                price_table.loading = False
                 price_table.add_row(
                     f"[dim]No symbols in list '{category}'. Add some in the Configs tab.[/dim]"
                 )
+                self._refresh_search_snapshot(price_table)
 
-    @work(exclusive=True, thread=True)
-    def fetch_prices(
+    def fetch_prices(self, symbols, force, category, enable_pre_post_market=False):
+        if self._closing:
+            return None
+        self._price_request_serial += 1
+        worker = self._fetch_prices(symbols, force, category, enable_pre_post_market,
+                                    request_id=self._price_request_serial)
+        self._current_price_worker = worker
+        return worker
+
+    @on(Worker.StateChanged)
+    def on_price_worker_state_changed(self, event: Worker.StateChanged):
+        if event.worker is self._current_price_worker and event.state in (WorkerState.CANCELLED, WorkerState.ERROR):
+            try:
+                self.query_one("#price-table", DataTable).loading = False
+            except NoMatches:
+                pass
+
+    @work(exclusive=True, thread=True, group="fetch_prices")
+    def _fetch_prices(
         self,
         symbols: list[str],
         force: bool,
         category: str,
         enable_pre_post_market: bool = False,
+        request_id: int = 0,
     ):
         """Worker to fetch market price data in the background."""
         try:
-            data = market_provider.get_market_price_data(
-                symbols,
-                force_refresh=force,
-                enable_pre_post_market=enable_pre_post_market,
-            )
+            with _price_fetch_lock:
+                if self._closing or get_current_worker().is_cancelled:
+                    return
+                data = market_provider.get_market_price_data(
+                    symbols,
+                    force_refresh=force,
+                    enable_pre_post_market=enable_pre_post_market,
+                )
             if not get_current_worker().is_cancelled:
-                self.post_message(PriceDataUpdated(data, category))
+                self.post_message(PriceDataUpdated(data, category, request_id=request_id))
         except Exception as e:
             logging.error(f"Worker fetch_prices failed for category '{category}': {e}")
+            if not get_current_worker().is_cancelled:
+                self.post_message(PriceDataUpdated([], category, request_id=request_id, error=str(e)))
 
-    @work(exclusive=True, thread=True)
+    @work(exclusive=True, thread=True, group="fetch_market_status")
     def fetch_market_status(self, calendar: str):
         """Worker to fetch the current market status."""
         try:
@@ -1323,7 +1375,7 @@ class StocksTUI(App):
         except Exception as e:
             logging.error(f"Market status worker failed: {e}")
 
-    @work(exclusive=True, thread=True)
+    @work(exclusive=True, thread=True, group="fetch_news")
     def fetch_news(self, tickers_str: str):
         """Worker to fetch news data for one or more tickers."""
         try:
@@ -1341,7 +1393,7 @@ class StocksTUI(App):
             if not get_current_worker().is_cancelled:
                 self.post_message(NewsDataUpdated(tickers_str, None))
 
-    @work(exclusive=True, thread=True)
+    @work(exclusive=True, thread=True, group="fetch_historical_data")
     def fetch_historical_data(self, ticker: str, period: str, interval: str = "1d"):
         """Worker to fetch historical price data for a specific ticker."""
         try:
@@ -1353,7 +1405,7 @@ class StocksTUI(App):
                 f"Worker fetch_historical_data failed for {ticker} over {period} with interval {interval}: {e}"
             )
 
-    @work(exclusive=True, thread=True)
+    @work(exclusive=True, thread=True, group="fetch_options_expirations")
     def fetch_options_expirations(self, ticker: str):
         """Worker to fetch available expiration dates for a ticker's options."""
         try:
@@ -1365,7 +1417,7 @@ class StocksTUI(App):
             if not get_current_worker().is_cancelled:
                 self.post_message(OptionsExpirationsUpdated(ticker, ()))
 
-    @work(exclusive=True, thread=True)
+    @work(exclusive=True, thread=True, group="fetch_options_chain")
     def fetch_options_chain(self, ticker: str, expiration: str):
         """Worker to fetch options chain data for a ticker and expiration date."""
         try:
@@ -1393,7 +1445,7 @@ class StocksTUI(App):
             if not get_current_worker().is_cancelled:
                 self._last_options_data = {"error": str(e)}
 
-    @work(exclusive=True, thread=True)
+    @work(exclusive=True, thread=True, group="run_info_comparison_test")
     def run_info_comparison_test(self, ticker: str):
         """Worker to fetch fast vs slow vs batch vs prepost ticker info for the debug tab."""
         data = market_provider.get_ticker_info_comparison(ticker)
@@ -1407,7 +1459,7 @@ class StocksTUI(App):
                 )
             )
 
-    @work(exclusive=True, thread=True)
+    @work(exclusive=True, thread=True, group="run_ticker_debug_test")
     def run_ticker_debug_test(self, symbols: list[str]):
         """Worker to run the individual ticker latency test."""
         start_time = time.perf_counter()
@@ -1416,7 +1468,7 @@ class StocksTUI(App):
         if not get_current_worker().is_cancelled:
             self.post_message(TickerDebugDataUpdated(data, total_time))
 
-    @work(exclusive=True, thread=True)
+    @work(exclusive=True, thread=True, group="run_list_debug_test")
     def run_list_debug_test(self, lists: dict[str, list[str]]):
         """Worker to run the list batch network test."""
         start_time = time.perf_counter()
@@ -1425,7 +1477,7 @@ class StocksTUI(App):
         if not get_current_worker().is_cancelled:
             self.post_message(ListDebugDataUpdated(data, total_time))
 
-    @work(exclusive=True, thread=True)
+    @work(exclusive=True, thread=True, group="run_cache_test")
     def run_cache_test(self, lists: dict[str, list[str]]):
         """Worker to run the local cache speed test."""
         start_time = time.perf_counter()
@@ -1730,7 +1782,18 @@ class StocksTUI(App):
     @on(PriceDataUpdated)
     async def on_price_data_updated(self, message: PriceDataUpdated):
         """Handles the arrival of new price data from a worker."""
-        now_str = f"Last Refresh: {datetime.now():%H:%M:%S}"
+        if self._closing or (message.request_id is not None and message.request_id != self._price_request_serial):
+            return
+        if message.error:
+            if self.get_active_category() == message.category or message.category == "all":
+                try:
+                    self.query_one("#price-table", DataTable).loading = False
+                    self.query_one("#last-refresh-time", Label).update("Refresh failed; previous quotes retained")
+                except NoMatches:
+                    pass
+                self.notify(f"Could not update quotes: {message.error}", severity="error")
+            return
+        now_str = self._quote_status(message.data)
         if message.category == "all":
             for cat in list(self.config.lists.keys()) + ["all"]:
                 self._last_refresh_times[cat] = now_str
@@ -1815,6 +1878,7 @@ class StocksTUI(App):
                     dt.add_row(
                         f"[dim]No symbols in list '{active_category}'. Add some in the Configs tab.[/dim]"
                     )
+                self._refresh_search_snapshot(dt)
                 return
 
             alias_map = self._get_alias_map()
@@ -1831,7 +1895,8 @@ class StocksTUI(App):
             }
 
             self._apply_price_table_sort()
-            self.query_one("#last-refresh-time", Label).update(now_str)
+            self._refresh_search_snapshot(dt)
+            self._show_quote_status(now_str)
 
             if self._pre_refresh_cursor_key:
                 try:
@@ -2656,32 +2721,71 @@ class StocksTUI(App):
         except NoMatches:
             self.bell()
 
-    @on(Input.Changed, "#search-box")
-    def on_search_changed(self, event: Input.Changed):
-        """Filters the target table as the user types in the search box."""
-        query = event.value
-        if not self.search_target_table:
+    def _show_quote_status(self, text):
+        label = self.query_one("#last-refresh-time", Label)
+        label.update(text)
+        label.tooltip = text
+
+    @staticmethod
+    def _quote_status(data):
+        timestamps = []
+        stale = []
+        for row in data:
+            try:
+                stamp = datetime.fromisoformat(row.get("_fetched_at", ""))
+                if stamp.tzinfo is not None:
+                    timestamps.append(stamp)
+            except (ValueError, TypeError):
+                pass
+            if row.get("_stale", True):
+                stale.append(row.get("symbol", "?"))
+        oldest = min(timestamps).astimezone().strftime("%Y-%m-%d %H:%M:%S") if timestamps else "unknown"
+        text = f"Oldest known fetch: {oldest}"
+        if stale:
+            warning = "cached/unverified: " + ", ".join(stale[:3])
+            if len(stale) > 3:
+                warning += f" (+{len(stale)-3})"
+            text = warning + "; " + text
+        return text
+
+    def _refresh_search_snapshot(self, table):
+        if self.search_target_table is not table:
+            return
+        try:
+            search = self.query_one(SearchBox)
+        except NoMatches:
+            return
+        self._original_table_data = [(key, table.get_row(key)) for key in table.rows]
+        self._apply_search(search.value)
+
+    def _apply_search(self, query):
+        if self.search_target_table is None:
             return
         from textual.fuzzy import Matcher
-
         matcher = Matcher(query)
         self.search_target_table.clear()
-        if not query:
-            for row_key, row_data in self._original_table_data:
-                self.search_target_table.add_row(*row_data, key=row_key)
-            return
-        for row_key, row_data in self._original_table_data:
-            searchable_string = " ".join(extract_cell_text(cell) for cell in row_data)
-            if matcher.match(searchable_string) > 0:
-                self.search_target_table.add_row(*row_data, key=row_key)
+        for key, cells in self._original_table_data:
+            if not query or matcher.match(" ".join(extract_cell_text(cell) for cell in cells)) > 0:
+                self.search_target_table.add_row(*cells, key=key)
+        if self.search_target_table.id == "price-table":
+            self._apply_price_table_sort()
 
-    @on(Input.Submitted, "#search-box")
-    def on_search_submitted(self, event: Input.Submitted):
-        """Removes the search box when the user presses Enter."""
+    def _dismiss_search(self):
+        self._apply_search("")
         try:
             self.query_one(SearchBox).remove()
         except NoMatches:
             pass
+        self._original_table_data = []
+        self.search_target_table = None
+
+    @on(Input.Changed, "#search-box")
+    def on_search_changed(self, event: Input.Changed):
+        self._apply_search(event.value)
+
+    @on(Input.Submitted, "#search-box")
+    def on_search_submitted(self, event: Input.Submitted):
+        self._dismiss_search()
 
     def action_edit_ticker_quick(self) -> None:
         """Opens a quick edit modal for the currently selected ticker."""
@@ -2748,6 +2852,7 @@ class StocksTUI(App):
                 )
                 return
 
+            @config_errors(app=self)
             def on_close(result: tuple[str, str] | None):
                 if result:
                     field, value = result
@@ -2830,6 +2935,7 @@ class StocksTUI(App):
                     )
                 else:
                     dt.add_row("[dim]No symbols match the current tag filter.[/dim]")
+                self._refresh_search_snapshot(dt)
                 return
 
             alias_map = self._get_alias_map()
@@ -2839,6 +2945,8 @@ class StocksTUI(App):
 
             self._style_and_populate_price_table(dt, rows)
             self._apply_price_table_sort()
+            self._refresh_search_snapshot(dt)
+            self._show_quote_status(self._quote_status(data_for_table))
 
             self._is_filter_refresh = False
 

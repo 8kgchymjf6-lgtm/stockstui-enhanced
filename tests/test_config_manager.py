@@ -3,10 +3,9 @@ import tempfile
 import json
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-import importlib
 import stockstui.config_manager
 from platformdirs import PlatformDirs
-from stockstui.config_manager import ConfigManager
+from stockstui.config_manager import ConfigManager, ConfigSaveError
 
 
 class TestConfigManager(unittest.TestCase):
@@ -55,11 +54,8 @@ class TestConfigManager(unittest.TestCase):
         self.mock_dirs = MagicMock(spec=PlatformDirs)
         self.mock_dirs.user_config_dir = str(self.user_config_dir)
         self.mock_dirs.user_cache_dir = str(self.user_cache_dir)
-        self.patcher = patch("platformdirs.PlatformDirs", return_value=self.mock_dirs)
+        self.patcher = patch("stockstui.config_manager.dirs", self.mock_dirs)
         self.patcher.start()
-
-        # Reload the module to use the mocked PlatformDirs
-        importlib.reload(stockstui.config_manager)
 
     def tearDown(self):
         self.patcher.stop()
@@ -209,9 +205,10 @@ class TestConfigManager(unittest.TestCase):
         cm = ConfigManager(app_root=self.app_root)
         # Mock os.replace to fail
         with patch("os.replace", side_effect=OSError("Replace failed")):
-            with self.assertLogs(level="ERROR") as log:
+            with self.assertRaisesRegex(ConfigSaveError, "Replace failed"):
                 cm._atomic_save("test.json", {"a": 1})
-                self.assertIn("Replace failed", log.output[0])
+        self.assertFalse((self.user_config_dir / "test.json").exists())
+        self.assertFalse(list(self.user_config_dir.glob("*.tmp")))
 
 
     def test_merge_defaults_handles_invalid_default_json(self):

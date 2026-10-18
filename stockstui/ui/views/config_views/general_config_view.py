@@ -1,3 +1,4 @@
+from stockstui.ui.config_errors import config_errors
 from textual.containers import Vertical, Horizontal
 from textual.widgets import Button, Input, Label, Select, Switch, ListView, ListItem
 from textual.app import ComposeResult, on
@@ -73,7 +74,7 @@ class GeneralConfigView(Vertical):
                 with Horizontal(classes="config-option-horizontal"):
                     yield Label("Refresh\nInterval (s):", classes="config-label")
                     yield Input(
-                        id="refresh-interval-input", validators=[NotEmpty(), Number()]
+                        id="refresh-interval-input", validators=[NotEmpty(), Number(minimum=1)]
                     )
                     yield Button("Update", id="update-refresh-interval")
             # Right side for managing which tabs are visible
@@ -129,6 +130,7 @@ class GeneralConfigView(Vertical):
             self._loading = False
 
     @on(Button.Pressed, "#update-refresh-interval")
+    @config_errors
     def on_update_refresh_button_pressed(self):
         """Handles the 'Update' button press for the refresh interval setting."""
         input_widget = self.query_one("#refresh-interval-input", Input)
@@ -149,6 +151,7 @@ class GeneralConfigView(Vertical):
                 self.app.notify("Invalid interval value.", severity="error")
 
     @on(Switch.Changed, "#enable-pre-post-market-switch")
+    @config_errors
     def on_enable_pre_post_market_switch_changed(self, event: Switch.Changed):
         """Handles changes to the 'Pre/Post Market' switch."""
         if getattr(self, "_loading", False):
@@ -157,6 +160,7 @@ class GeneralConfigView(Vertical):
         self.app.config.save_settings()
 
     @on(Switch.Changed, "#auto-refresh-switch")
+    @config_errors
     def on_switch_changed(self, event: Switch.Changed):
         """Handles changes to the 'Auto Refresh' switch."""
         if getattr(self, "_loading", False):
@@ -166,6 +170,7 @@ class GeneralConfigView(Vertical):
         self.app._manage_price_refresh_timer()
 
     @on(Switch.Changed, "#suppress-tui-logs-switch")
+    @config_errors
     def on_suppress_logs_switch_changed(self, event: Switch.Changed):
         """Handles changes to the 'Suppress TUI Logs' switch."""
         if getattr(self, "_loading", False):
@@ -176,6 +181,7 @@ class GeneralConfigView(Vertical):
 
 
     @on(Select.Changed)
+    @config_errors
     def on_select_changed(self, event: Select.Changed):
         """Handles changes to Select widgets (Default Tab, Theme, Market Calendar)."""
         if getattr(self, "_loading", False):
@@ -183,20 +189,22 @@ class GeneralConfigView(Vertical):
         if event.value is Select.BLANK:
             return
 
-        if event.select.id == "default-tab-select":
-            self.app.config.settings["default_tab_category"] = str(event.value)
-        elif event.select.id == "theme-select":
-            theme_name = str(event.value)
-            self.app.app.theme = self.app.config.settings["theme"] = theme_name
-            self.app._update_theme_variables(theme_name)
-        elif event.select.id == "market-calendar-select":
-            self.app.config.settings["market_calendar"] = str(event.value)
+        setting = {"default-tab-select": "default_tab_category", "theme-select": "theme",
+                   "market-calendar-select": "market_calendar"}.get(event.select.id)
+        if setting is None:
+            return
+        self.app.config.settings[setting] = str(event.value)
+        self.app.config.save_settings()
+        if setting == "theme":
+            self.app.theme = str(event.value)
+            self.app._update_theme_variables(str(event.value))
+        elif setting == "market_calendar":
             if self.app.market_status_timer:
                 self.app.market_status_timer.stop()
             self.app.fetch_market_status(str(event.value))
-        self.app.config.save_settings()
 
     @on(Switch.Changed)
+    @config_errors
     async def on_tab_visibility_toggled(self, event: Switch.Changed):
         """Handles changes to tab visibility switches."""
         if getattr(self, "_loading", False):

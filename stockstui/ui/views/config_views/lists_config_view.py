@@ -1,3 +1,4 @@
+from stockstui.ui.config_errors import config_errors
 import logging
 from textual.containers import Vertical, Horizontal
 from textual.widgets import Button, DataTable, Label, ListView, ListItem, Switch
@@ -187,6 +188,7 @@ class ListsConfigView(Vertical):
     async def on_add_list_pressed(self):
         """Handles the 'Add List' button press, opening a modal for new list name."""
 
+        @config_errors(app=self.app)
         async def on_close(new_name: str | None):
             if new_name and new_name not in self.app.config.lists:
                 self.app.config.lists[new_name] = []
@@ -208,6 +210,7 @@ class ListsConfigView(Vertical):
             self.app.notify("Select a list first.", severity="warning")
             return
 
+        @config_errors(app=self.app)
         def on_close(result: tuple[str, str, str, str] | list[tuple[str, str, str, str]] | None):
             if not result:
                 return
@@ -277,6 +280,7 @@ class ListsConfigView(Vertical):
             self.on_delete_list_confirmed,
         )
 
+    @config_errors
     async def on_delete_list_confirmed(self, confirmed: bool):
         """Callback for the delete list confirmation modal."""
         if confirmed:
@@ -310,6 +314,7 @@ class ListsConfigView(Vertical):
             self.app.notify("Select a list to rename.", severity="warning")
             return
 
+        @config_errors(app=self.app)
         async def on_close(new_name: str | None):
             if (
                 new_name
@@ -371,6 +376,7 @@ class ListsConfigView(Vertical):
         original_note = item.get("note") or ""
         original_tags = item.get("tags") or ""
 
+        @config_errors(app=self.app)
         def on_close(result: tuple[str, str, str, str] | None):
             if result:
                 new_ticker, new_alias, new_note, new_tags = result
@@ -413,6 +419,7 @@ class ListsConfigView(Vertical):
             return
         ticker = extract_cell_text(table.get_cell_at((table.cursor_row, 0)))
 
+        @config_errors(app=self.app)
         def on_close(confirmed: bool):
             if confirmed:
                 self.app.config.lists[self.app.active_list_category] = [
@@ -429,6 +436,7 @@ class ListsConfigView(Vertical):
         )
 
     @on(Button.Pressed, "#move_list_up")
+    @config_errors
     async def on_move_list_up_pressed(self):
         """Moves the selected list up in the order."""
         category = self.app.active_list_category
@@ -444,6 +452,7 @@ class ListsConfigView(Vertical):
             self.query_one(ListView).index = idx - 1
 
     @on(Button.Pressed, "#move_list_down")
+    @config_errors
     async def on_move_list_down_pressed(self):
         """Moves the selected list down in the order."""
         category = self.app.active_list_category
@@ -459,6 +468,7 @@ class ListsConfigView(Vertical):
             self.query_one(ListView).index = idx + 1
 
     @on(Button.Pressed, "#move_ticker_up")
+    @config_errors
     def on_move_ticker_up_pressed(self):
         """Moves the selected ticker up within its list."""
         table = self.query_one("#ticker-table", DataTable)
@@ -471,6 +481,7 @@ class ListsConfigView(Vertical):
             self.call_later(table.move_cursor, row=idx - 1)
 
     @on(Button.Pressed, "#move_ticker_down")
+    @config_errors
     def on_move_ticker_down_pressed(self):
         """Moves the selected ticker down within its list."""
         table = self.query_one("#ticker-table", DataTable)
@@ -486,6 +497,7 @@ class ListsConfigView(Vertical):
             self.call_later(table.move_cursor, row=idx + 1)
 
     @on(Switch.Changed)
+    @config_errors
     def on_column_visibility_changed(self, event: Switch.Changed):
         switch = event.switch
         # Check if this switch belongs to the columns list
@@ -538,6 +550,7 @@ class ListsConfigView(Vertical):
             self._update_column_highlight()
 
     @on(Button.Pressed, "#move_col_up")
+    @config_errors
     def on_move_col_up(self):
         view = self.query_one("#columns-list-view", ListView)
         idx = view.index
@@ -556,6 +569,7 @@ class ListsConfigView(Vertical):
                 self.app._rebuild_visible_columns()
 
     @on(Button.Pressed, "#move_col_down")
+    @config_errors
     def on_move_col_down(self):
         view = self.query_one("#columns-list-view", ListView)
         idx = view.index

@@ -1,3 +1,5 @@
+import hashlib
+import re
 from textual.message import Message
 from textual.containers import Horizontal, VerticalScroll, Grid
 from textual.widgets import Button, Label, Static
@@ -19,6 +21,7 @@ class TagFilterWidget(Widget):
         super().__init__(**kwargs)
         self.available_tags = sorted(list(set(available_tags or [])))
         self.selected_tags = set()
+        self._tags_by_id = {}
 
     def compose(self) -> ComposeResult:
         """Creates the layout for the tag filter widget."""
@@ -29,9 +32,10 @@ class TagFilterWidget(Widget):
                 with VerticalScroll(classes="tag-buttons-scroll"):
                     with Grid(classes="tag-buttons-container"):
                         for tag in self.available_tags:
-                            yield Button(
-                                tag, id=f"tag-button-{tag}", classes="tag-button"
-                            )
+                            button_id = (f"tag-button-{tag}" if re.fullmatch(r"[a-zA-Z0-9_-]+", tag)
+                                         else "tag-special-" + hashlib.sha256(tag.encode()).hexdigest())
+                            self._tags_by_id[button_id] = tag
+                            yield Button(Text(tag), id=button_id, classes="tag-button")
                 yield Button("Clear", id="clear-filter-button", variant="default")
         yield Label("Filter status", id="filter-status")
 
@@ -43,7 +47,8 @@ class TagFilterWidget(Widget):
     @on(Button.Pressed, ".tag-button")
     def on_tag_button_pressed(self, event: Button.Pressed) -> None:
         """Handles clicks on individual tag buttons."""
-        tag = event.button.id.replace("tag-button-", "")
+        button_id = event.button.id or ""
+        tag = self._tags_by_id.get(button_id, button_id.removeprefix("tag-button-"))
 
         if tag in self.selected_tags:
             self.selected_tags.remove(tag)

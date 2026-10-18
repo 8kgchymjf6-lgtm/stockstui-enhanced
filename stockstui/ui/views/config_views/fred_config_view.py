@@ -1,3 +1,4 @@
+from stockstui.ui.config_errors import config_errors
 from textual.containers import Vertical, Horizontal, ScrollableContainer
 from textual.widgets import Button, DataTable, Input, Label, Switch
 from textual.app import ComposeResult, on
@@ -106,6 +107,7 @@ class FredConfigView(ScrollableContainer):
             self._fetch_descriptions(missing_descriptions, api_key)
 
     @work(exclusive=True, thread=True)
+    @config_errors
     def _fetch_descriptions(self, series_list: list, api_key: str):
         """Fetch descriptions for series from FRED API and cache them directly."""
         from stockstui.data_providers import fred_provider
@@ -192,6 +194,7 @@ class FredConfigView(ScrollableContainer):
                 event.stop()
 
     @on(Button.Pressed, "#save-fred-api-key")
+    @config_errors
     def on_save_api_key(self):
         """Saves the API Key."""
         if getattr(self, "_loading", False):
@@ -208,6 +211,7 @@ class FredConfigView(ScrollableContainer):
         self.app.notify("FRED API Key saved.")
 
     @on(Switch.Changed, "#fred-visibility-switch")
+    @config_errors
     async def on_fred_visibility_changed(self, event: Switch.Changed):
         """Handles toggling the FRED tab visibility."""
         if getattr(self, "_loading", False):
@@ -227,6 +231,7 @@ class FredConfigView(ScrollableContainer):
     def on_add_series(self):
         """Adds a new series using a modal."""
 
+        @config_errors(app=self.app)
         def on_close(result):
             if result:
                 # AddTickerModal returns (ticker, alias, note, tags)
@@ -279,6 +284,7 @@ class FredConfigView(ScrollableContainer):
         aliases = settings.get("series_aliases", {})
         current_alias = aliases.get(series_id, "")
 
+        @config_errors(app=self.app)
         def handle_edit(new_alias: str | None):
             if new_alias is None:
                 return
@@ -301,6 +307,7 @@ class FredConfigView(ScrollableContainer):
         self.app.push_screen(EditFredSeriesModal(series_id, current_alias), handle_edit)
 
     @on(Button.Pressed, "#remove-fred-series")
+    @config_errors
     def on_remove_series(self):
         """Removes the selected series."""
         table = self.query_one("#fred-series-table", DataTable)
@@ -333,6 +340,7 @@ class FredConfigView(ScrollableContainer):
             self.app.notify(f"Removed series {series_id}")
 
     @on(Button.Pressed, "#move-fred-series-up")
+    @config_errors
     def on_move_series_up(self):
         """Moves the selected series up."""
         table = self.query_one("#fred-series-table", DataTable)
@@ -352,6 +360,7 @@ class FredConfigView(ScrollableContainer):
             self.call_later(table.move_cursor, row=idx - 1)
 
     @on(Button.Pressed, "#move-fred-series-down")
+    @config_errors
     def on_move_series_down(self):
         """Moves the selected series down."""
         table = self.query_one("#fred-series-table", DataTable)

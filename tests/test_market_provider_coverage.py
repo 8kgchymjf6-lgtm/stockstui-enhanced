@@ -18,7 +18,7 @@ class TestMarketProviderCoverage(unittest.TestCase):
 
     def test_cache_population_and_retrieval(self):
         """Test populating and retrieving cache states."""
-        price_data = {"AAPL": {"data": "foo"}}
+        price_data = {"AAPL": {"data": {"symbol":"AAPL", "price":123.}}}
         info_data = {"AAPL": {"exchange": "NYSE"}}
 
         market_provider.populate_price_cache(price_data)
@@ -28,7 +28,8 @@ class TestMarketProviderCoverage(unittest.TestCase):
         self.assertEqual(market_provider.get_info_cache_state(), info_data)
 
         self.assertTrue(market_provider.is_cached("AAPL"))
-        self.assertEqual(market_provider.get_cached_price("AAPL"), "foo")
+        self.assertEqual(market_provider.get_cached_price("AAPL")["price"], 123.)
+        self.assertTrue(market_provider.get_cached_price("AAPL")["_stale"])
         self.assertIsNone(market_provider.get_cached_price("GOOG"))
 
     @patch("stockstui.data_providers.market_provider.yf.download")

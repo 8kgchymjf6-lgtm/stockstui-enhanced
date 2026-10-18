@@ -1,3 +1,4 @@
+from stockstui.ui.config_errors import config_errors
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Label, DataTable
@@ -103,6 +104,7 @@ class FredView(Vertical):
             aliases = settings.get("series_aliases", {})
             current_alias = aliases.get(series_id, "")
 
+            @config_errors(app=self.app)
             def handle_edit(new_alias: str | None):
                 if new_alias is None:
                     return

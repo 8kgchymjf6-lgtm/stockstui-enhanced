@@ -1,3 +1,4 @@
+from stockstui.common import PriceDataUpdated
 import unittest
 import webbrowser
 from datetime import datetime, timedelta, timezone
@@ -1140,7 +1141,7 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
         worker = MagicMock()
         worker.is_cancelled = False
 
-        method = StocksTUI.fetch_prices.__wrapped__
+        method = StocksTUI._fetch_prices.__wrapped__
 
         with (
             patch(
@@ -1179,8 +1180,11 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
                 side_effect=RuntimeError("network"),
             ),
             patch("stockstui.main.logging.error") as log_error,
+            patch("stockstui.main.get_current_worker", return_value=worker),
         ):
             method(app, ["AAPL"], False, "stocks")
+
+        self.assertEqual(app.post_message.call_args.args[0].error, "network")
 
         log_error.assert_called_once()
         self.assertIn("network", log_error.call_args.args[0])
@@ -1962,9 +1966,7 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
             "crypto": [{"ticker": "BTC-USD"}],
         }
 
-        message = MagicMock()
-        message.category = "stocks"
-        message.data = [{"symbol": "AAPL", "price": 100.0}]
+        message = PriceDataUpdated([{"symbol": "AAPL", "price": 100.0}], "stocks")
 
         with (
             patch.object(app, "get_active_category", return_value="news"),

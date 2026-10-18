@@ -255,7 +255,7 @@ class DbManager:
             logging.info(
                 f"Saved/Updated {len(cache_data)} items in the persistent price cache with field-level merging."
             )
-        except sqlite3.Error as e:
+        except Exception as e:
             logging.error(f"Failed to save price cache to database: {e}")
             if self.conn:
                 self.conn.rollback()
@@ -303,7 +303,7 @@ class DbManager:
     ):
         """Saves or updates an option position."""
         if not self.conn:
-            return
+            return False
         try:
             cursor = self.conn.cursor()
             cursor.execute("BEGIN IMMEDIATE")
@@ -317,10 +317,13 @@ class DbManager:
             )
             self.conn.commit()
             logging.info(f"Saved option position: {symbol}")
+            return True
         except sqlite3.Error as e:
             logging.error(f"Failed to save option position {symbol}: {e}")
             if self.conn:
                 self.conn.rollback()
+
+            return False
 
     @_with_connection_lock
     def get_option_position(self, symbol: str) -> dict | None:
@@ -350,17 +353,20 @@ class DbManager:
     def delete_option_position(self, symbol: str):
         """Deletes an option position."""
         if not self.conn:
-            return
+            return False
         try:
             cursor = self.conn.cursor()
             cursor.execute("BEGIN IMMEDIATE")
             cursor.execute("DELETE FROM option_positions WHERE symbol = ?", (symbol,))
             self.conn.commit()
             logging.info(f"Deleted option position: {symbol}")
+            return True
         except sqlite3.Error as e:
             logging.error(f"Failed to delete option position {symbol}: {e}")
             if self.conn:
                 self.conn.rollback()
+
+            return False
 
     @_with_connection_lock
     def get_all_option_positions(self) -> dict:
