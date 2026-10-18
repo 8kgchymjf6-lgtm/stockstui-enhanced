@@ -1121,6 +1121,8 @@ class TestMainHelpers(unittest.IsolatedAsyncioTestCase):
                 return config_container
             if selector == "#status-bar-container":
                 return status_bar
+            if selector == "#last-refresh-time":
+                return MagicMock()
             raise AssertionError(f"Unexpected app selector: {selector}")
 
         with patch.object(app, "query_one", side_effect=app_query):

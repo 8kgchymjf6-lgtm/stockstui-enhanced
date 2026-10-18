@@ -1240,6 +1240,8 @@ class StocksTUI(App):
                 await output_container.mount(view)
             output_container.current = view_id
         else:
+            # A newly selected list must not inherit the previous list's time.
+            self._show_quote_status(self._quote_status([]), [])
             output_container.current = "price-table-container"
             price_container = output_container.query_one("#price-table-container")
 
@@ -1830,8 +1832,14 @@ class StocksTUI(App):
         """Handles the arrival of new price data from a worker."""
         if self._closing or (message.request_id is not None and message.request_id != self._price_request_serial):
             return
+        active_category = self.get_active_category()
+        is_relevant = (
+            active_category is not None
+            and active_category not in ("history", "news", "options", "fred", "debug", "configs")
+            and (active_category == message.category or message.category == "all")
+        )
         if message.error:
-            if self.get_active_category() == message.category or message.category == "all":
+            if is_relevant:
                 try:
                     self.query_one("#price-table", DataTable).loading = False
                     self.query_one("#last-refresh-time", Label).update("Refresh failed; previous quotes retained")
@@ -1846,12 +1854,6 @@ class StocksTUI(App):
         else:
             self._last_refresh_times[message.category] = now_str
 
-        active_category = self.get_active_category()
-        is_relevant = (active_category == message.category) or (
-            message.category == "all"
-            and active_category
-            not in ["history", "news", "options", "debug", "configs"]
-        )
         if not is_relevant:
             return
 
@@ -1925,6 +1927,7 @@ class StocksTUI(App):
                         f"[dim]No symbols in list '{active_category}'. Add some in the Configs tab.[/dim]"
                     )
                 self._refresh_search_snapshot(dt)
+                self._show_quote_status(self._quote_status([]), [])
                 return
 
             alias_map = self._get_alias_map()
@@ -1942,7 +1945,7 @@ class StocksTUI(App):
 
             self._apply_price_table_sort()
             self._refresh_search_snapshot(dt)
-            self._show_quote_status(now_str, message.data)
+            self._show_quote_status(self._quote_status(data_for_table), data_for_table)
 
             if self._pre_refresh_cursor_key:
                 try:
@@ -2447,8 +2450,9 @@ class StocksTUI(App):
 
         try:
             status_label = self.query_one("#last-refresh-time", Label)
-            if new_category in ["history", "news", "options", "debug", "configs"]:
+            if new_category in ["history", "news", "options", "fred", "debug", "configs"]:
                 status_label.update("")
+                status_label.tooltip = None
         except NoMatches:
             pass
 
@@ -2981,7 +2985,7 @@ class StocksTUI(App):
         try:
             dt = self.query_one("#price-table", DataTable)
             active_category = self.get_active_category()
-            if not active_category:
+            if not active_category or active_category in ("history", "news", "options", "fred", "debug", "configs"):
                 return
 
             dt.clear()
@@ -3020,6 +3024,7 @@ class StocksTUI(App):
                 else:
                     dt.add_row("[dim]No symbols match the current tag filter.[/dim]")
                 self._refresh_search_snapshot(dt)
+                self._show_quote_status(self._quote_status([]), [])
                 return
 
             alias_map = self._get_alias_map()
