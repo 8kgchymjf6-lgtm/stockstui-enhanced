@@ -221,6 +221,54 @@ Maintenance release focused on missing numeric values, regression checks, and CI
 
 ---
 
+# v1.0.1-enhanced
+
+Release date:
+
+- 2026-08-02
+
+Base release:
+
+- stocksTUI v0.1.0-b14
+
+Previous enhanced release:
+
+- v1.0.0-enhanced
+
+Release type:
+
+- Enhanced documentation and maintenance guidance release
+
+Changes since v1.0.0-enhanced:
+
+- 8 documentation files changed
+- 872 insertions
+- 0 deletions
+
+Documentation release covering the original enhanced changes, validation notes, and maintenance workflow.
+
+## Highlights
+
+- Added an enhanced project overview identifying the upstream base and original enhanced release
+- Documented sorting, financial formatting and market-provider changes in a technical overview
+- Added validation and testing notes for the initial enhanced changes
+- Added maintenance guidance for branches, annotated release tags, the installed application and backups
+- Documented upstream attribution and the GPL-3.0-or-later license
+- Linked the enhanced documentation from the root README and added a dedicated enhanced changelog
+
+## Historical source verification
+
+- Tagged source commit: `50c1fb5b9ef0e7dc19b588c5783b09056e380b1f`.
+- The diff from 1.0.0 contains the root README notice and seven new Markdown
+  documents: enhanced overview, changelog, technical overview, validation,
+  testing, maintenance and credits. No Python, dependency or workflow changes
+  were introduced in this release.
+- The historical validation/testing documents describe the original enhanced
+  code and checks; they do not establish the later 1.0.3/1.0.4 test counts or
+  coverage results. This documentation release makes no new CI-result claim.
+
+---
+
 # v1.0.0-enhanced
 
 Release date:
@@ -230,6 +278,33 @@ Release date:
 Base release:
 
 - stocksTUI v0.1.0-b14
+
+Previous release:
+
+- Upstream v0.1.0-b14 (first enhanced release)
+
+Release type:
+
+- Sorting, financial-data presentation, and market-data normalization release
+
+First enhanced release, focused on sorting, financial-data presentation, and market-data normalization.
+
+## Highlights
+
+- Added History sorting shortcuts for High and Low, and corrected Open sorting while Sort Mode is active
+- Set Description as the default price-table sort and guarded keyboard sorting when the requested column is hidden
+- Improved numeric sorting of formatted values, including K, M, B and T abbreviations
+- Added compact market-cap and volume displays, one-decimal price/range formatting, and DKK currency support
+- Normalized dividend-yield units and improved trailing/forward PE selection, retaining numeric zero values
+- Updated financial-column alignment and color thresholds, and clarified market status as OPEN, PRE, AFTER or CLOSED
+
+## Historical source verification
+
+- Tagged source commit: `53a3b6904097a41dfa4119155b6bbd676caa3470`.
+- The upstream-to-release diff contains exactly three modified Python files,
+  with 282 insertions and 48 deletions. Highlights above describe that diff.
+- The dedicated enhanced documentation was added subsequently in 1.0.1.
+  Later test/coverage figures are recorded under their own release versions.
 
 Modified source files:
 
@@ -322,14 +397,9 @@ Source-code statistics:
 
 # Documentation
 
-The enhanced edition introduces dedicated project documentation covering:
-
-- Enhanced project overview.
-- Technical implementation.
-- Validation.
-- Testing.
-- Maintenance.
-- Credits.
+The initial code changes are documented by the enhanced guides and changelog
+added in [v1.0.1-enhanced](#v101-enhanced). Those documentation files were not
+part of the original 1.0.0 tag.
 
 ---
 
