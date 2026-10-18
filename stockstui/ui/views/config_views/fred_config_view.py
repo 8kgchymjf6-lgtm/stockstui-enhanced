@@ -170,7 +170,7 @@ class FredConfigView(ScrollableContainer):
 
             for series_id, title in cached_descriptions.items():
                 try:
-                    table.update_cell(series_id, desc_column_key, title)
+                    table.update_cell(series_id, desc_column_key, Text(title))
                     logging.info(f"FRED: Updated cell for {series_id}")
                 except Exception as e:
                     logging.error(f"FRED: Failed to update cell for {series_id}: {e}")
@@ -272,6 +272,7 @@ class FredConfigView(ScrollableContainer):
         self.app.push_screen(AddFredSeriesModal(), on_close)
 
     @on(DataTable.RowSelected, "#fred-series-table")
+    @on(DataTable.CellSelected, "#fred-series-table")
     def on_row_selected(self):
         """Trigger editing when a row is selected with Enter."""
         self.on_edit_series()
@@ -280,7 +281,7 @@ class FredConfigView(ScrollableContainer):
     def on_edit_series(self):
         """Edits the selected series alias."""
         table = self.query_one("#fred-series-table", DataTable)
-        if table.cursor_row < 0:
+        if table.cursor_row < 0 or not table.row_count:
             self.app.notify("Select a series to edit.", severity="warning")
             return
 
@@ -322,7 +323,7 @@ class FredConfigView(ScrollableContainer):
     def on_remove_series(self):
         """Removes the selected series."""
         table = self.query_one("#fred-series-table", DataTable)
-        if table.cursor_row < 0:
+        if table.cursor_row < 0 or not table.row_count:
             self.app.notify("Select a series to remove.", severity="warning")
             return
 

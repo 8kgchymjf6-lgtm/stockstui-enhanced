@@ -164,7 +164,7 @@ class OptionsView(Vertical):
             try:
                 expiration_str = last_data.get("expiration", "")
                 exp_date = datetime.strptime(expiration_str, "%Y-%m-%d")
-                days_to_exp = (exp_date - datetime.now()).days
+                days_to_exp = (exp_date.date() - datetime.now().date()).days
             except Exception:
                 days_to_exp = None
 
@@ -413,6 +413,10 @@ class OptionsView(Vertical):
             return
 
         if focused.id not in ["options-calls-table", "options-puts-table"]:
+            return
+
+        # An options side may be empty while the other side has contracts.
+        if not focused.row_count:
             return
 
         # Get selected row

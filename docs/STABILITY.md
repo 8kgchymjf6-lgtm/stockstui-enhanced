@@ -1,7 +1,7 @@
 # Local stability and validation
 
 Updated: 2026-10-18. Working branch: `fix/stability`.
-Local package version: `0.1.0b14+enhanced.20261018.3`, based on upstream b14.
+Local package version: `0.1.0b14+enhanced.20261018.4`, based on upstream b14.
 This identifies the locally maintained build; no public release is published.
 
 ## Completed audit
@@ -123,7 +123,40 @@ style-only Ruff findings are also not part of the critical lint gate.
 - Adding a ticker to every portfolio uses one atomic configuration save. A failed
   save rolls back the complete operation. Portfolio timestamps identify actual UTC.
 
-## Latest local validation (.3)
+## Small user-interface and output corrections (.4)
+
+- Empty FRED settings/summary and options-side tables do not dereference a missing
+  selected cell. Enter handles the FRED settings table's actual cell-selection
+  event. FRED settings remain selected across a visibility/configuration rebuild.
+- Unknown market status displays UNKNOWN rather than CLOSED. The compact fetch
+  status line is unchanged. Expiration days use calendar dates, so an expiration
+  today displays zero rather than minus one. Vim radio controls support j/k.
+- CLI quote and FRED aliases render literally, including Rich-like brackets;
+  overflowing derived quote changes display unavailable rather than infinity.
+  Refreshed FRED descriptions retain literal Text cells.
+- Open-interest charts scale extreme finite counts internally, retain readable
+  original labels and generate a bounded number of finite axis ticks. A previously
+  overflowing loop could otherwise keep adding to an infinite upper bound.
+
+## Latest local validation (.4)
+
+The complete unchanged-source suite ran 924 tests: 922 passed and 2
+opt-in live checks were skipped. All test modules were measured in four isolated
+processes and their branch/statement coverage combined: 92.31%, above 80%.
+This round adds 12 regression tests, including real keypresses and an actual
+plotext render with extreme counts. The Enter regression is also reproduced
+against the committed baseline with a loaded, focusable table.
+
+Full-package mypy (49 source files), critical Ruff, shell syntax, whitespace
+and dependency checks passed on Linux/Python 3.14.4. After installation,
+118 regression tests passed against the actual pipx production modules with
+isolated validation tooling. All 55 Python/resource files match the wheel/source;
+40 other distribution versions, launcher and four personal JSON hashes remain
+unchanged. Older candidate failures are retained in the task's log archive.
+Other Python versions and remote CI were not run. These checks do not prove
+universal absence of defects. No public release was published.
+
+## Previous local validation (.3)
 
 The complete suite ran 912 tests against unchanged source: 910 passed and
 2 opt-in live tests were skipped. All modules were measured in four isolated

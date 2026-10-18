@@ -1,3 +1,4 @@
+import math
 import pandas as pd
 from typing import Protocol, cast
 from textual_plotext import PlotextPlot
@@ -143,6 +144,15 @@ class OIChart(PlotextPlot):
             p_val = p_row["openInterest"].sum() if not p_row.empty else 0
             put_oi.append(p_val)
 
+        # Bound the plotting coordinates as well as the tick-generation work.
+        # Even finite provider counts may overflow plotext's internal arithmetic.
+        if any(not math.isfinite(value) for value in call_oi + put_oi):
+            return
+        max_count = max([0.0, *call_oi, *put_oi])
+        scale = max_count if max_count > 1e100 or 0 < max_count < 1e-100 else 1.0
+        call_oi = [float(value) / scale for value in call_oi]
+        put_oi = [float(value) / scale for value in put_oi]
+
         # Plot
         # Format labels
         labels = [f"{int(s)}" if float(s).is_integer() else f"{s:.1f}" for s in strikes]
@@ -185,7 +195,9 @@ class OIChart(PlotextPlot):
             # Find a nice step size
             # We want about 5 ticks
             rough_step = max_oi / 5
-            magnitude = 10 ** (len(str(int(rough_step))) - 1)
+            magnitude = 10.0 ** math.floor(math.log10(rough_step))
+            if magnitude == 0:
+                return
             base = rough_step / magnitude
 
             # Round to nice base
@@ -198,18 +210,22 @@ class OIChart(PlotextPlot):
             else:
                 nice_base = 10
 
-            step = nice_base * magnitude
+            tick_step = nice_base * magnitude
 
             # Generate ticks
             ticks: list[float] = []
-            current = 0.0
-            while current <= max_oi * 1.1:  # Go slightly above max
+            for index in range(12):
+                current = index * tick_step
+                if not math.isfinite(current) or current > max_oi:
+                    break
                 ticks.append(current)
-                current += step
 
             def format_large_num(n):
+                n *= scale
                 if n == 0:
                     return "0"
+                if n >= 1e12 or n < 0.01:
+                    return f"{n:.2e}"
                 if n >= 1_000_000:
                     val = n / 1_000_000
                     return (

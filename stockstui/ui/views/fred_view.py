@@ -106,7 +106,7 @@ class FredView(Vertical):
         """Edit the alias of the selected series."""
         try:
             table = self.query_one("#fred-summary-table", FredDataTable)
-            if table.cursor_type == "none":
+            if table.cursor_type == "none" or not table.row_count:
                 return
 
             row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
@@ -151,7 +151,7 @@ class FredView(Vertical):
         """Open the selected FRED series in the default web browser."""
         try:
             table = self.query_one("#fred-summary-table", FredDataTable)
-            if table.cursor_type == "none" or table.cursor_row < 0:
+            if table.cursor_type == "none" or table.cursor_row < 0 or not table.row_count:
                 return
 
             row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key

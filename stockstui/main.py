@@ -50,7 +50,7 @@ from textual.color import Color
 from platformdirs import PlatformDirs
 
 from stockstui.quote_status import status_display, summarize_quotes
-from stockstui.data_validation import normalize_price_row
+from stockstui.data_validation import finite_number, normalize_price_row
 from stockstui.config_manager import ConfigManager, ConfigSaveError
 from stockstui.common import (
     PriceDataUpdated,
@@ -844,6 +844,7 @@ class StocksTUI(App):
                 "lists": config_container.show_lists,
                 "general": config_container.show_general,
                 "portfolios": config_container.show_portfolios,
+                "fred": config_container.show_fred,
             }
             show_method = view_map.get(config_sub_view)
             if show_method:
@@ -1236,6 +1237,7 @@ class StocksTUI(App):
                     "lists": config_container.show_lists,
                     "general": config_container.show_general,
                     "portfolios": config_container.show_portfolios,
+                    "fred": config_container.show_fred,
                 }
                 show_method = view_map.get(self._force_config_sub_view)
                 if show_method:
@@ -3264,8 +3266,8 @@ def run_cli_output(args: argparse.Namespace):
 
             change, change_percent = None, None
             if price is not None and previous_close is not None and previous_close != 0:
-                change = price - previous_close
-                change_percent = change / previous_close
+                change = finite_number(price - previous_close)
+                change_percent = finite_number(change / previous_close) if change is not None else None
 
             # Resolve currency symbol using the fetched ticker data, not the last item in the list iteration
             currency_code = ticker_data.get("currency", "USD")
@@ -3326,13 +3328,13 @@ def run_cli_output(args: argparse.Namespace):
                 else:
                     style, change_text, pct_text = "", "0.00", "0.00%"
             table.add_row(
-                desc,
+                Text(str(desc) if desc is not None else symbol),
                 Text(price_text, style="cyan"),
                 Text(change_text, style=style),
                 Text(pct_text, style=style),
                 day_r,
                 wk_r,
-                symbol,
+                Text(symbol),
             )
 
         console.print(table)
@@ -3416,13 +3418,13 @@ def run_cli_output(args: argparse.Namespace):
                     )
 
                     fred_table.add_row(
-                        description,
+                        Text(str(description or "N/A")),
                         Text(current_str, style="cyan"),  # Match Ticker price color
                         Text(yoy_str, style=yoy_style),
                         Text(z_str, style=z_style),
                         rng_str,
-                        item.get("date", "N/A"),
-                        sid,
+                        Text(str(item.get("date") or "N/A")),
+                        Text(str(sid or "N/A")),
                     )
 
                 console.print(fred_table)

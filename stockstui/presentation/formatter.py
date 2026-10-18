@@ -494,7 +494,9 @@ def format_market_status(market_status: dict | None) -> tuple | None:
         main_status = "AFTER"
         style_var = status_map["post"]
         reason_display = ""
-    else:  # closed or unknown
+    elif status_code != "closed":
+        return (text, [("UNKNOWN ", status_map["unknown"])])
+    else:
         main_status = "CLOSED"
         style_var = status_map["closed"]
         reason_display = ""
