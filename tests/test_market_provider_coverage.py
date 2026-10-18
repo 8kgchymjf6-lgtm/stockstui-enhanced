@@ -90,6 +90,7 @@ class TestMarketProviderCoverage(unittest.TestCase):
             "expiry": future,
             "data": {"symbol": "AAPL", "price": 100.0},
         }
+        market_provider._info_cache["AAPL"] = {"currency": "USD", "exchange": "NYSE"}
 
         # Mock market status closed so no fast data fetch
         with patch(
@@ -591,7 +592,9 @@ class TestMarketProviderCoverage(unittest.TestCase):
 
         cached = market_provider._price_cache["FALLBACK"]["data"]
         self.assertEqual(cached["symbol"], "FALLBACK")
-        self.assertEqual(cached["description"], "Data Unavailable")
+        self.assertEqual(cached["description"], "Fallback Company")
+        self.assertEqual(cached["price"], 125.0)
+        self.assertEqual(cached["market_cap"], 1250.0)
 
     def test_failed_slow_fetch_preserves_existing_description(self):
         """A transient fetch failure should not overwrite useful cached data."""

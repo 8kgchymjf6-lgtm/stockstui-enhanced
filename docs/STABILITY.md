@@ -1,7 +1,7 @@
 # Local stability and validation
 
 Updated: 2026-10-18. Working branch: `fix/stability`.
-Local package version: `0.1.0b14+enhanced.20261018.2`, based on upstream b14.
+Local package version: `0.1.0b14+enhanced.20261018.3`, based on upstream b14.
 This identifies the locally maintained build; no public release is published.
 
 ## Completed audit
@@ -105,7 +105,47 @@ style-only Ruff findings are also not part of the critical lint gate.
   Help/version/manual calls preserve diagnostic logs, and the notification
   handler is detached even when the application exits with an exception.
 
-## Latest local validation (.2)
+## Price integrity and persistence follow-up (.3)
+
+- Price and metadata caches compare completed request generations under the
+  cache lock. An older response cannot replace a newer completed publication;
+  a newer pending request does not prevent an earlier result from making progress.
+  Delayed failures cannot mark newer successful prices as failed.
+- Persistent price merges reject older snapshots and preserve their newer expiry.
+  Split-aware merges clear figures in old share units in SQLite as well as memory.
+  Outdated split replies cannot relabel preserved prices with a wrong quote time.
+- SQLite metadata retains quote type and pre/post-market support after restart.
+  Migration adds nullable columns and preserves old rows. Missing legacy metadata
+  is fetched again when necessary for refresh classification.
+- Transient metadata failures remain retryable. Optional fast-info failures and
+  incomplete OHLCV frames retain usable slow quotes and Close values. Zero EPS
+  and beta remain valid; zero share counts do not mask valid fallback counts.
+- Adding a ticker to every portfolio uses one atomic configuration save. A failed
+  save rolls back the complete operation. Portfolio timestamps identify actual UTC.
+
+## Latest local validation (.3)
+
+The complete suite ran 912 tests against unchanged source: 910 passed and
+2 opt-in live tests were skipped. All modules were measured in four isolated
+processes, combined, and checked against the coverage gate. Combined statement/
+branch coverage is 90.69%, above the required 80%. Both live provider checks
+also passed separately after the final provider changes.
+
+The follow-up adds 22 regression tests, including deterministic overlapping-call
+orders, split persistence, old-schema migration and portfolio write failure.
+Full-package mypy (49 source files), critical Ruff, shell syntax and whitespace
+checks passed on Linux/Python 3.14.4. The other Python versions and remote CI
+matrix were not run locally.
+
+After installation, 106 regression tests passed against the actual pipx package
+from outside the checkout. All 55 Python/resource files matched the verified wheel
+and source (49 Python files). All 40 other distribution versions, the launcher
+and four personal JSON files were unchanged. Dependency compatibility passed;
+pipx metadata identifies the new local version. No public release was published.
+The earlier candidate's overlap-starvation failure and superseded full-run results
+are retained as intermediate evidence, rather than presented as final validation.
+
+## Previous local validation (.2)
 
 The complete suite discovered 890 tests: 888 passed and two opt-in live tests
 were skipped. Both live tests also passed in a separate run against the public

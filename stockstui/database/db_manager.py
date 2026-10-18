@@ -87,6 +87,8 @@ class DbManager:
                     short_name TEXT,
                     long_name TEXT,
                     currency TEXT,
+                    quote_type TEXT,
+                    has_pre_post_market INTEGER,
                     timestamp REAL NOT NULL
                 )
             """)
@@ -105,6 +107,9 @@ class DbManager:
             except sqlite3.OperationalError:
                 # Column already exists or table does not exist
                 pass
+            for name, kind in (("quote_type", "TEXT"), ("has_pre_post_market", "INTEGER")):
+                if name not in {column[1] for column in cursor.execute("PRAGMA table_info(ticker_info)")}:
+                    cursor.execute(f"ALTER TABLE ticker_info ADD COLUMN {name} {kind}")
             self.conn.commit()
         except sqlite3.Error as e:
             logging.error(f"Failed to create database tables: {e}")
@@ -195,17 +200,21 @@ class DbManager:
                 datetime.now(timezone.utc).timestamp() - CACHE_LOAD_DURATION_SECONDS
             )
             cursor.execute(
-                "SELECT ticker, exchange, short_name, long_name, currency FROM ticker_info WHERE timestamp >= ?",
+                "SELECT ticker, exchange, short_name, long_name, currency, quote_type, has_pre_post_market FROM ticker_info WHERE timestamp >= ?",
                 (load_after_ts,),
             )
             rows = cursor.fetchall()
-            for ticker, exchange, short_name, long_name, currency in rows:
+            for ticker, exchange, short_name, long_name, currency, quote_type, pre_post in rows:
                 loaded_data[ticker] = {
                     "exchange": exchange,
                     "shortName": short_name,
                     "longName": long_name,
                     "currency": currency,
                 }
+                if quote_type is not None:
+                    loaded_data[ticker]["quoteType"] = quote_type
+                if pre_post in (0, 1):
+                    loaded_data[ticker]["hasPrePostMarketData"] = bool(pre_post)
         except sqlite3.Error as e:
             logging.error(f"Failed to load info cache from database: {e}")
         logging.info(f"Loaded {len(loaded_data)} items from the persistent info cache.")
@@ -232,14 +241,19 @@ class DbManager:
                         continue
 
                     # Fetch the existing record from the database to perform a field-level merge.
-                    cursor.execute("SELECT data FROM price_cache WHERE ticker = ?", (ticker,))
+                    cursor.execute("SELECT data, timestamp FROM price_cache WHERE ticker = ?", (ticker,))
                     row = cursor.fetchone()
+                    saved_expiry = expiry_dt.timestamp()
 
                     if row:
                         try:
-                            existing_dict = json.loads(row[0])
+                            existing_dict = normalize_price_row(json.loads(row[0]), ticker) or {}
                             # Merge existing persistent data with new memory update
                             merged_dict = merge_price_data(existing_dict, data_dict)
+                            if (existing_dict.get("_fetched_at") is not None
+                                and merged_dict.get("_fetched_at") == existing_dict.get("_fetched_at")
+                                and data_dict.get("_fetched_at") != existing_dict.get("_fetched_at")):
+                                saved_expiry = row[1]
                         except (json.JSONDecodeError, ValueError, TypeError):
                             merged_dict = data_dict
                     else:
@@ -247,7 +261,7 @@ class DbManager:
 
                     cursor.execute(
                         "INSERT OR REPLACE INTO price_cache (ticker, data, timestamp) VALUES (?, ?, ?)",
-                        (ticker, json.dumps(merged_dict), expiry_dt.timestamp()),
+                        (ticker, json.dumps(merged_dict), saved_expiry),
                     )
                 except Exception as e:
                     logging.warning(
@@ -278,6 +292,8 @@ class DbManager:
                     data.get("shortName"),
                     data.get("longName"),
                     data.get("currency"),
+                    data.get("quoteType"),
+                    int(data["hasPrePostMarketData"]) if isinstance(data.get("hasPrePostMarketData"), bool) else None,
                     now_ts,
                 )
             )
@@ -287,7 +303,7 @@ class DbManager:
             cursor = self.conn.cursor()
             cursor.execute("BEGIN IMMEDIATE")
             cursor.executemany(
-                "INSERT OR REPLACE INTO ticker_info (ticker, exchange, short_name, long_name, currency, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO ticker_info (ticker, exchange, short_name, long_name, currency, quote_type, has_pre_post_market, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 items_to_save,
             )
             self.conn.commit()

@@ -25,7 +25,7 @@ class PortfolioManager:
             self.config.portfolios["portfolios"] = {}
 
         if "default" not in self.config.portfolios["portfolios"]:
-            now = datetime.datetime.now().isoformat() + "Z"
+            now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
             self.config.portfolios["portfolios"]["default"] = {
                 "name": "Default Portfolio",
                 "description": "Main portfolio containing all stocks",
@@ -72,7 +72,7 @@ class PortfolioManager:
         while portfolio_id in self.config.portfolios.get("portfolios", {}):
             portfolio_id = str(uuid.uuid4())[:8]
 
-        now = datetime.datetime.now().isoformat() + "Z"
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
         self.config.portfolios["portfolios"][portfolio_id] = {
             "name": name,
             "description": description,
@@ -100,7 +100,7 @@ class PortfolioManager:
         portfolio = self.config.portfolios["portfolios"][portfolio_id]
         portfolio["name"] = name
         portfolio["description"] = description
-        portfolio["modified"] = datetime.datetime.now().isoformat() + "Z"
+        portfolio["modified"] = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
         self.config.save_portfolios()
         logging.info(f"Updated portfolio {portfolio_id}")
@@ -138,7 +138,7 @@ class PortfolioManager:
         ticker = ticker.upper()
         if ticker not in portfolio["tickers"]:
             portfolio["tickers"].append(ticker)
-            portfolio["modified"] = datetime.datetime.now().isoformat() + "Z"
+            portfolio["modified"] = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
             self.config.save_portfolios()
             logging.info(f"Added {ticker} to portfolio {portfolio_id}")
 
@@ -157,7 +157,7 @@ class PortfolioManager:
         ticker = ticker.upper()
         if ticker in portfolio["tickers"]:
             portfolio["tickers"].remove(ticker)
-            portfolio["modified"] = datetime.datetime.now().isoformat() + "Z"
+            portfolio["modified"] = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
             self.config.save_portfolios()
             logging.info(f"Removed {ticker} from portfolio {portfolio_id}")
 
@@ -213,5 +213,13 @@ class PortfolioManager:
             ticker: The stock ticker symbol
         """
         ticker = ticker.upper()
-        for portfolio_id in self.config.portfolios.get("portfolios", {}):
-            self.add_ticker_to_portfolio(portfolio_id, ticker)
+        changed = False
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        for portfolio in self.config.portfolios.get("portfolios", {}).values():
+            if ticker not in portfolio["tickers"]:
+                portfolio["tickers"].append(ticker)
+                portfolio["modified"] = now
+                changed = True
+        if changed:
+            self.config.save_portfolios()
+            logging.info("Added %s to all portfolios", ticker)

@@ -26,7 +26,7 @@ Enhanced release:
 
 Current local stability build:
 
-- `0.1.0b14+enhanced.20261018.2` (upstream b14; no public release published)
+- `0.1.0b14+enhanced.20261018.3` (upstream b14; no public release published)
 - Validation and recovery notes: [STABILITY.md](STABILITY.md)
 
 Default branch:
@@ -63,13 +63,10 @@ The enhanced edition includes improvements in the following areas:
 - Defensive programming
 - Overall application robustness
 
-Only three Python source files have been modified:
-
-- `stockstui/main.py`
-- `stockstui/presentation/formatter.py`
-- `stockstui/data_providers/market_provider.py`
-
-This simplifies future maintenance and upstream comparisons.
+The original enhancement touched the main application, formatter and market
+provider. Subsequent stability work also covers configuration, SQLite persistence,
+other providers and views. Current scope, validation and recovery are documented
+in [STABILITY.md](STABILITY.md); the original three-file description is historical.
 
 ---
 

@@ -102,9 +102,23 @@ def merge_price_data(existing: dict, new_data: dict) -> dict:
     Returns:
         A new dictionary with the merged fields.
     """
-    from stockstui.data_validation import normalize_price_row
+    from stockstui.data_validation import normalize_price_row, PRICE_NUMBERS
+    from stockstui.quote_time import parse_quote_time
     existing = normalize_price_row(existing) or {}
     new_data = normalize_price_row(new_data) or {}
+    previous_fetch = parse_quote_time(existing.get("_fetched_at"))
+    incoming_fetch = parse_quote_time(new_data.get("_fetched_at"))
+    previous_split = parse_quote_time(existing.get("_last_split_at"))
+    incoming_split = parse_quote_time(new_data.get("_last_split_at"))
+    if previous_fetch and incoming_fetch and incoming_fetch < previous_fetch:
+        return existing
+    if previous_split and ((incoming_split and incoming_split < previous_split)
+                           or (incoming_fetch and incoming_fetch < previous_split)):
+        return existing
+    if incoming_split and ((previous_split and incoming_split > previous_split)
+                           or (previous_fetch and incoming_split > previous_fetch)):
+        existing = {key: value for key, value in existing.items()
+                    if key not in PRICE_NUMBERS and key != "_fetched_at" and not key.startswith("_quote")}
     merged = existing.copy()
 
     # Iterate through all fields provided in the update.
@@ -121,10 +135,7 @@ def merge_price_data(existing: dict, new_data: dict) -> dict:
                         if existing_ath is not None:
                             try:
                                 existing_ath_val = float(existing_ath)
-                                # Keep the maximum to prevent corruption from stale/incomplete API data.
-                                # ASSUMPTION: All-time highs generally do not decrease, except on stock splits
-                                # which we accept if the new value is definitive and higher, or if we need to adjust.
-                                # But to prevent temporary API glitch overwrites, we default to the higher value.
+                                # Values in the same share units retain the observed maximum.
                                 if new_ath > existing_ath_val:
                                     merged[k] = new_ath
                             except (ValueError, TypeError, OverflowError):

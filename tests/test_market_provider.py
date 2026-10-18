@@ -47,6 +47,7 @@ class TestMarketProvider(unittest.TestCase):
             "expiry": now + timedelta(hours=1),
             "data": {"symbol": "GOOG", "price": 2800.0},
         }
+        market_provider._info_cache["GOOG"] = {"currency": "USD", "exchange": "NYSE"}
         mock_market_status.return_value = {"is_open": False}
         market_provider.get_market_price_data(["GOOG"])
         mock_yf_ticker.assert_not_called()

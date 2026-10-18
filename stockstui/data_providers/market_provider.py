@@ -6,9 +6,10 @@ from typing import Any
 import time
 from copy import deepcopy
 from threading import RLock
+from itertools import count
 import pandas as pd
 from stockstui.utils import merge_price_data
-from stockstui.data_validation import finite_number, normalize_price_row, PRICE_NUMBERS
+from stockstui.data_validation import finite_number, normalize_price_row
 from stockstui.quote_time import quote_time_fields, replace_quote_time, parse_quote_time
 
 
@@ -20,6 +21,27 @@ _market_calendars: dict[str, Any] = {}
 
 _cache_lock = RLock()
 _news_versions: dict[str, object] = {}
+_price_versions: dict[str, int] = {}
+_info_versions: dict[str, int] = {}
+_request_ids = count()
+
+
+def _begin_price_requests(tickers):
+    with _cache_lock:
+        return {ticker: next(_request_ids) for ticker in tickers}
+
+
+def _may_publish_price(ticker, tokens):
+    # Compare completed publications so continuous refresh cannot starve results.
+    return ticker in tokens and tokens[ticker] >= _price_versions.get(ticker, -1)
+
+
+def _first_number(*values, positive=False):
+    for value in values:
+        number = finite_number(value)
+        if number is not None and (not positive or number > 0):
+            return number
+    return None
 
 
 def _store_price(ticker, entry):
@@ -131,8 +153,6 @@ def get_info_cache_state() -> dict:
 def get_market_price_data(
     tickers: list[str], force_refresh: bool = False, enable_pre_post_market: bool = False
 ) -> list[dict]:
-    price_cache = get_price_cache_state()
-    info_cache = get_info_cache_state()
     seen = set()
     valid_tickers = []
     for t in tickers:
@@ -143,6 +163,9 @@ def get_market_price_data(
     if not valid_tickers:
         return []
 
+    tokens = _begin_price_requests(valid_tickers)
+    price_cache = get_price_cache_state()
+    info_cache = get_info_cache_state()
     now = datetime.now(timezone.utc)
 
     # 1. Determine which tickers need a full metadata (slow) fetch.
@@ -151,13 +174,15 @@ def get_market_price_data(
         if (
             force_refresh
             or ticker not in price_cache
+            or not info_cache.get(ticker)
+            or (enable_pre_post_market and info_cache[ticker].get("hasPrePostMarketData") is None)
             or now >= price_cache[ticker].get("expiry", now)
         ):
             slow_data_to_fetch.append(ticker)
 
     # 2. Perform slow fetch. This populates info_cache, which is needed for the next step.
     if slow_data_to_fetch:
-        _fetch_and_cache_slow_data(slow_data_to_fetch)
+        _fetch_and_cache_slow_data(slow_data_to_fetch, request_tokens=tokens)
         price_cache = get_price_cache_state()
         info_cache = get_info_cache_state()
 
@@ -167,6 +192,9 @@ def get_market_price_data(
     fast_data_to_fetch, prepost_data_to_fetch = [], []
 
     for ticker in valid_tickers:
+        with _cache_lock:
+            if not _may_publish_price(ticker, tokens):
+                continue
         info = info_cache.get(ticker, {})
         if not info:
             continue
@@ -214,7 +242,7 @@ def get_market_price_data(
     if live_prices:
         with _cache_lock:
             for ticker, update in live_prices.items():
-                if ticker not in _price_cache or "data" not in _price_cache[ticker]:
+                if not _may_publish_price(ticker, tokens) or ticker not in _price_cache or "data" not in _price_cache[ticker]:
                     continue
                 merged = merge_price_data(_price_cache[ticker]["data"], update)
                 if update.get("price") is not None:
@@ -225,15 +253,20 @@ def get_market_price_data(
                 if merged.get("shares") and merged.get("price"):
                     merged["market_cap"] = finite_number(merged["shares"] * merged["price"])
                 _price_cache[ticker]["data"] = merged
+                _price_versions[ticker] = tokens[ticker]
 
     # Return copies: a renderer or a shutdown save must never iterate live caches.
     attempted = set(fast_data_to_fetch + prepost_data_to_fetch)
     successful_live = {ticker for ticker, update in live_prices.items() if update.get("price") is not None}
     with _cache_lock:
+        eligible = {ticker for ticker in valid_tickers if _may_publish_price(ticker, tokens)}
+        attempted &= eligible
+        successful_live &= eligible
         for ticker in attempted - successful_live:
             if ticker in _price_cache and isinstance(_price_cache[ticker].get("data"), dict):
                 _price_cache[ticker]["data"]["_fetch_failed"] = True
                 _price_cache[ticker]["fetch_failed"] = True
+                _price_versions[ticker] = tokens[ticker]
     snapshot = get_price_cache_state()
     final_data = []
     for ticker in valid_tickers:
@@ -253,184 +286,120 @@ def get_market_price_data(
     return final_data
 
 
-def _fetch_and_cache_slow_data(tickers: list[str]):
-    """
-    Fetches full metadata (info + fast_info) for a batch of tickers in parallel.
+def _publish_slow_price(ticker, tokens, data, expiry, failed, info=None):
+    """Merge and publish together; superseded network calls cannot mutate caches."""
+    with _cache_lock:
+        if not _may_publish_price(ticker, tokens):
+            return
+        previous = _price_cache.get(ticker, {}).get("data", {})
+        previous_split = parse_quote_time(previous.get("_last_split_at"))
+        incoming_split = parse_quote_time(data.get("_last_split_at"))
+        if previous_split and incoming_split and incoming_split < previous_split:
+            _price_cache[ticker]["fetch_failed"] = True
+            _price_cache[ticker]["data"]["_fetch_failed"] = True
+            _price_versions[ticker] = tokens[ticker]
+            return
+        if failed:
+            merged = previous.copy() if previous else data.copy()
+            if not merged.get("description") or merged["description"] in ("Data Unavailable", "Invalid Ticker"):
+                merged["description"] = data.get("description", "Data Unavailable")
+        else:
+            merged = merge_price_data(previous, data)
+            if data.get("price") is not None:
+                replace_quote_time(merged, data)
+                merged["_fetched_at"] = datetime.now(timezone.utc).isoformat()
+        _store_price(ticker, {"expiry": expiry, "data": merged,
+                              "fetch_failed": failed or data.get("price") is None})
+        _price_versions[ticker] = tokens[ticker]
+        if info is not None and tokens[ticker] >= _info_versions.get(ticker, -1):
+            _store_info(ticker, info)
+            _info_versions[ticker] = tokens[ticker]
 
-    PERF: Previously this iterated sequentially, waiting for each HTTP response
-    before starting the next. Now each ticker is fetched in its own thread via
-    ThreadPoolExecutor, cutting wall-clock time from O(n * latency) to roughly
-    O(latency) for typical list sizes.
 
-    Cache entries are published under a short lock after futures complete;
-    network requests never hold the cache lock.
-
-    PERF: _calculate_info_expiry() is also memoised per exchange within the
-    batch — the calendar schedule DataFrame is built once per exchange rather
-    than once per ticker.
-    """
+def _fetch_and_cache_slow_data(tickers: list[str], request_tokens=None):
+    """Fetch metadata concurrently, then publish only the current symbol request."""
+    if not tickers:
+        return
+    tokens = request_tokens if request_tokens is not None else _begin_price_requests(tickers)
+    with _cache_lock:
+        tickers = [ticker for ticker in tickers if _may_publish_price(ticker, tokens)]
     if not tickers:
         return
 
-    def _fetch_one(ticker: str) -> tuple[str, dict | None, object | None]:
-        """Fetch info for a single ticker. Runs inside the thread pool."""
+    def fetch_one(ticker):
         try:
-            tkr = yf.Ticker(ticker)
-            return ticker, tkr.info, tkr.fast_info
+            reply = yf.Ticker(ticker)
+            info = reply.info
         except Exception:
-            logging.warning(f"Failed to fetch slow data for {ticker}")
-            return ticker, None, None
+            logging.warning("Failed to fetch slow data for %s", ticker)
+            return ticker, None, {}
+        try:
+            fast = reply.fast_info
+        except Exception:
+            fast = {}
+        return ticker, info, fast
 
-    # Cap threads to avoid hammering yfinance rate-limits on very large lists.
-    max_workers = min(len(tickers), 8)
-    raw_results: dict[str, tuple[dict | None, object | None]] = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_ticker = {executor.submit(_fetch_one, t): t for t in tickers}
-        for future in as_completed(future_to_ticker):
-            ticker, slow_info, fast_info = future.result()
-            raw_results[ticker] = (slow_info, fast_info)
+    raw = {}
+    with ThreadPoolExecutor(max_workers=min(len(tickers), 8)) as executor:
+        futures = [executor.submit(fetch_one, ticker) for ticker in tickers]
+        for future in as_completed(futures):
+            ticker, info, fast = future.result()
+            raw[ticker] = info, fast
 
-    # PERF: Cache _calculate_info_expiry() per exchange so the Pandas calendar
-    # schedule query runs once per exchange per batch instead of once per ticker.
-    exchange_expiry_cache: dict[str, datetime] = {}
-
-    # Publish entries under the cache lock without holding it across network calls.
-    # Preserve the original ticker order for predictability.
+    expiries = {}
     for ticker in tickers:
-        slow_info, fast_info = raw_results.get(ticker, (None, None))
+        slow, fast = raw[ticker]
         try:
-            if slow_info and slow_info.get("currency"):
-                exchange = slow_info.get("exchange", "NYSE")
-                _store_info(ticker, {
-                    "currency": slow_info.get("currency"),
-                    "exchange": exchange,
-                    "shortName": slow_info.get("shortName"),
-                    "longName": slow_info.get("longName"),
-                    "quoteType": slow_info.get("quoteType"),
-                    "hasPrePostMarketData": slow_info.get("hasPrePostMarketData", False),
-                })
-                if exchange not in exchange_expiry_cache:
-                    exchange_expiry_cache[exchange] = _calculate_info_expiry(exchange)
-                # yfinance returns objects that behave like dicts but Mypy doesn't always recognize them
-                fi: Any = fast_info
-                si: Any = slow_info
+            if not isinstance(slow, dict) or not slow.get("currency"):
+                transient = slow is None
+                _publish_slow_price(ticker, tokens,
+                    {"symbol": ticker, "description": "Data Unavailable" if transient else "Invalid Ticker"},
+                    datetime.now(timezone.utc) + (timedelta(minutes=15) if transient else timedelta(days=1)), True)
+                continue
 
-                # Fetch shares to enable market cap calculations during fast updates
-                shares = None
+            def fast_value(name, default=None):
                 try:
-                    shares = fi.get("shares")
+                    return fast.get(name, default)
                 except Exception:
-                    pass
-                if not shares:
-                    shares = si.get("sharesOutstanding") or si.get("floatShares")
+                    return default
 
-                shares = finite_number(shares)
-                # Use a paired regular-market price/time when available. FastInfo's
-                # lastPrice can come from a daily bar and has no matching trade time.
-                regular_price = finite_number(si.get("regularMarketPrice"))
-                price = regular_price if regular_price is not None else finite_number(fi.get("lastPrice"))
-                if price is None:
-                    price = finite_number(si.get("currentPrice"))
-                price_time = quote_time_fields(
-                    si.get("regularMarketTime") if regular_price else None, "quote"
-                )
-                new_data = {
-                    **price_time,
-                    "symbol": ticker,
-                    "currency": fi.get("currency", si.get("currency", "USD")),
-                    "description": si.get("longName", ticker),
-                    "price": price,
-                    "previous_close": si.get("regularMarketPreviousClose")
-                    or si.get("previousClose")
-                    or fi.get("previousClose")
-                    or si.get("open"),
-                    "day_low": fi.get("dayLow") or si.get("regularMarketDayLow"),
-                    "day_high": fi.get("dayHigh") or si.get("regularMarketDayHigh"),
-                    "volume": fi.get("lastVolume") or si.get("volume"),
-                    "open": fi.get("open") or si.get("open"),
-                    "fifty_two_week_low": si.get("fiftyTwoWeekLow"),
-                    "fifty_two_week_high": si.get("fiftyTwoWeekHigh"),
-                    "pe_ratio": (
-                         si.get("trailingPE")
-                         if isinstance(si.get("trailingPE"), (int, float))
-                         else si.get("forwardPE")
-                 ),
-                    "shares": shares,
-                    # Fallback to API-reported market cap if price or shares is missing/None
-                    "market_cap": shares * price
-                    if shares and price
-                    else (fi.get("marketCap") or si.get("marketCap")),
-                    "dividend_yield": (
-                        si.get("dividendYield") / 100
-                        if isinstance(si.get("dividendYield"), (int, float))
-                        else si.get("trailingAnnualDividendYield")
-                        if isinstance(si.get("trailingAnnualDividendYield"), (int, float))
-                        else None
-                        ),
-                    "eps": si.get("trailingEps") or si.get("forwardEps"),
-                    "beta": si.get("beta") or si.get("beta3Year"),
-                    "all_time_high": si.get("allTimeHigh"),
-                }
-
-                new_data = normalize_price_row(new_data, ticker) or {"symbol": ticker}
-                split_at = finite_number(si.get("lastSplitDate"))
-                if split_at is not None:
-                    new_data["_last_split_at"] = split_at
-                existing_entry = _price_entry(ticker)
-                if existing_entry and "data" in existing_entry:
-                    previous = existing_entry["data"]
-                    previous_split = previous.get("_last_split_at")
-                    fetched = parse_quote_time(previous.get("_fetched_at"))
-                    changed_units = split_at is not None and (
-                        (previous_split is not None and previous_split != split_at)
-                        or (fetched is not None and split_at > fetched.timestamp())
-                    )
-                    if changed_units:
-                        # Values before a split cannot be merged with the new share units.
-                        previous = {key: value for key, value in previous.items() if key not in PRICE_NUMBERS and key != "_fetched_at" and not key.startswith("_quote")}
-                    merged_data = merge_price_data(previous, new_data)
-                else:
-                    merged_data = new_data
-
-                if new_data.get("price") is not None:
-                    replace_quote_time(merged_data, new_data)
-                    merged_data["_fetched_at"] = datetime.now(timezone.utc).isoformat()
-                _store_price(ticker, {
-                    "expiry": exchange_expiry_cache[exchange],
-                    "data": merged_data,
-                    "fetch_failed": new_data.get("price") is None,
-                })
-            else:
-                # If slow_info is None, it means _fetch_one caught an exception (fetch failed).
-                # If slow_info is a dict but has no currency, it's an invalid ticker.
-                # In either case, we merge or keep existing cached data to avoid N/A corruption on transient failures.
-                description = "Data Unavailable" if slow_info is None else "Invalid Ticker"
-                existing_entry = _price_entry(ticker)
-                if existing_entry and "data" in existing_entry:
-                    merged_data = existing_entry["data"].copy()
-                    if "description" not in merged_data or merged_data["description"] in ("Data Unavailable", "Invalid Ticker"):
-                        merged_data["description"] = description
-                else:
-                    merged_data = {"symbol": ticker, "description": description}
-
-                # If transient failure (slow_info is None), set short expiry so we retry later.
-                # If permanent failure (Invalid Ticker), cache for 1 day.
-                expiry_delta = timedelta(minutes=15) if slow_info is None else timedelta(days=1)
-                _store_price(ticker, {**({
-                    "expiry": datetime.now(timezone.utc) + expiry_delta,
-                    "data": merged_data,
-                }), "fetch_failed": True})
+            exchange = slow.get("exchange", "NYSE")
+            if exchange not in expiries:
+                expiries[exchange] = _calculate_info_expiry(exchange)
+            metadata = {key: slow.get(key) for key in ("currency", "shortName", "longName", "quoteType")}
+            metadata.update(exchange=exchange, hasPrePostMarketData=slow.get("hasPrePostMarketData", False))
+            shares = _first_number(fast_value("shares"), slow.get("sharesOutstanding"), slow.get("floatShares"), positive=True)
+            regular = finite_number(slow.get("regularMarketPrice"))
+            price = regular if regular is not None else _first_number(fast_value("lastPrice"), slow.get("currentPrice"))
+            dividend = finite_number(slow.get("dividendYield"))
+            data = {
+                **quote_time_fields(slow.get("regularMarketTime") if regular is not None else None, "quote"),
+                "symbol": ticker, "currency": fast_value("currency") or slow.get("currency"),
+                "description": slow.get("longName") or ticker, "price": price,
+                "previous_close": _first_number(slow.get("regularMarketPreviousClose"), slow.get("previousClose"), fast_value("previousClose"), slow.get("open")),
+                "day_low": _first_number(fast_value("dayLow"), slow.get("regularMarketDayLow")),
+                "day_high": _first_number(fast_value("dayHigh"), slow.get("regularMarketDayHigh")),
+                "volume": _first_number(fast_value("lastVolume"), slow.get("volume")),
+                "open": _first_number(fast_value("open"), slow.get("open")),
+                "fifty_two_week_low": slow.get("fiftyTwoWeekLow"),
+                "fifty_two_week_high": slow.get("fiftyTwoWeekHigh"),
+                "pe_ratio": _first_number(slow.get("trailingPE"), slow.get("forwardPE")),
+                "shares": shares,
+                "market_cap": finite_number(shares * price) if shares is not None and price is not None else _first_number(fast_value("marketCap"), slow.get("marketCap")),
+                "dividend_yield": dividend / 100 if dividend is not None else finite_number(slow.get("trailingAnnualDividendYield")),
+                "eps": _first_number(slow.get("trailingEps"), slow.get("forwardEps")),
+                "beta": _first_number(slow.get("beta"), slow.get("beta3Year")),
+                "all_time_high": slow.get("allTimeHigh"),
+            }
+            data = normalize_price_row(data, ticker) or {"symbol": ticker}
+            split = parse_quote_time(slow.get("lastSplitDate"))
+            if split is not None and split <= datetime.now(timezone.utc):
+                data["_last_split_at"] = split.timestamp()
+            _publish_slow_price(ticker, tokens, data, expiries[exchange], False, metadata)
         except Exception:
-            logging.warning(f"Failed to cache slow data for {ticker}")
-            existing_entry = _price_entry(ticker)
-            if existing_entry and "data" in existing_entry:
-                merged_data = existing_entry["data"]
-            else:
-                merged_data = {"symbol": ticker, "description": "Data Unavailable"}
-            _store_price(ticker, {**({
-                "expiry": datetime.now(timezone.utc) + timedelta(minutes=15),
-                "data": merged_data,
-            }), "fetch_failed": True})
+            logging.warning("Failed to cache slow data for %s", ticker)
+            _publish_slow_price(ticker, tokens, {"symbol": ticker, "description": "Data Unavailable"},
+                                datetime.now(timezone.utc) + timedelta(minutes=15), True)
 
 
 def _fetch_fast_data(tickers: list[str], prepost: bool = False) -> dict:
@@ -505,10 +474,15 @@ def _fetch_fast_data(tickers: list[str], prepost: bool = False) -> dict:
                         )
                         continue
 
-                high_series = df["High"][ticker].dropna()
-                low_series = df["Low"][ticker].dropna()
-                open_series = df["Open"][ticker].dropna()
-                vol_series = df["Volume"][ticker].dropna()
+                def optional_series(name):
+                    try:
+                        return df[name][ticker].dropna()
+                    except KeyError:
+                        return pd.Series(dtype=float)
+                high_series = optional_series("High")
+                low_series = optional_series("Low")
+                open_series = optional_series("Open")
+                vol_series = optional_series("Volume")
                 
                 live_prices[ticker] = {
                     # The index identifies the bar start, not the last trade.
@@ -535,24 +509,25 @@ def _fetch_fast_data(tickers: list[str], prepost: bool = False) -> dict:
 
 
 def get_ticker_info(ticker: str) -> dict | None:
-    if ticker in _info_cache:
-        return get_info_cache_state()[ticker]
+    ticker = ticker.upper()
+    with _cache_lock:
+        cached = deepcopy(_info_cache.get(ticker))
+        if isinstance(cached, dict) and cached.get("currency"):
+            return cached
+        token = next(_request_ids)
     try:
         info = yf.Ticker(ticker).info
-        if not info or not info.get("currency"):
-            _store_info(ticker, {})
+        if not isinstance(info, dict) or not info.get("currency"):
             return None
-        _store_info(ticker, {
-            "currency": info.get("currency"),
-            "exchange": info.get("exchange"),
-            "shortName": info.get("shortName"),
-            "longName": info.get("longName"),
-            "quoteType": info.get("quoteType"),
-            "hasPrePostMarketData": info.get("hasPrePostMarketData", False),
-        })
-        return get_info_cache_state()[ticker]
+        data = {key: info.get(key) for key in ("currency", "exchange", "shortName", "longName", "quoteType")}
+        data["hasPrePostMarketData"] = info.get("hasPrePostMarketData", False)
+        with _cache_lock:
+            if token >= _info_versions.get(ticker, -1):
+                _store_info(ticker, data)
+                _info_versions[ticker] = token
+            return deepcopy(_info_cache.get(ticker)) or data
     except Exception:
-        _store_info(ticker, {})
+        # Transient failures must not become permanent negative cache entries.
         return None
 
 
