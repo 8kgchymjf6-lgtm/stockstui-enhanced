@@ -1,3 +1,6 @@
+> This file preserves the original upstream release history. For the enhanced
+> edition, see [CHANGELOG-ENHANCED.md](docs/CHANGELOG-ENHANCED.md), including version 1.0.4.
+
 # Change Log
 
 ## [0.1.0-b14] 2026-07-08

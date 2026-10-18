@@ -1,4 +1,5 @@
-# Validated local Linux / Python 3.14 environment, 2026-10-18, local build .2.
+# Validated Linux / Python 3.14 environment for release 1.0.4, 2026-10-18.
+# Captured during local build .2 and retained unchanged through release validation.
 # Constraints for existing runtime versions and actual validation tools; not a portable lock.
 annotated-types==0.8.0
 ast_serialize==0.6.0

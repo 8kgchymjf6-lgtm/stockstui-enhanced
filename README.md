@@ -28,16 +28,17 @@ compact `Last Refresh` status line.
 
 Local Linux/Python 3.14 validation: **922 tests passed, 2 optional live checks
 skipped; 92.31% combined statement/branch coverage**. Test coverage is not a
-percentage guarantee of reliability. GitHub Actions also runs the supported
-Python 3.10–3.14 matrix; check the workflow status for the selected commit.
+percentage guarantee of reliability. The [release CI](https://github.com/8kgchymjf6-lgtm/stockstui-enhanced/actions/runs/39138313029)
+also passed on Python 3.10–3.14. See [release validation](docs/VALIDATION.md)
+and the [documentation index](docs/README-ENHANCED.md#documentation).
 
 ---
 
 A fast, minimalist terminal app for checking stock prices, crypto, news, and historical charts — without leaving your shell. Built with [Textual](https://github.com/textualize/textual), powered by [yfinance](https://github.com/ranaroussi/yfinance), and made for people who prefer the command line over CNBC.
 
-![stocksTUI Screenshot - Main Interface](https://raw.githubusercontent.com/andriy-git/stocksTUI/main/assets/com.png)
-![stocksTUI Screenshot - CLI Mode](https://raw.githubusercontent.com/andriy-git/stocksTUI/main/assets/cli.png)
-![stocksTUI Screenshot - FRED Data](https://raw.githubusercontent.com/andriy-git/stocksTUI/main/assets/fred.png)
+![stocksTUI Screenshot - Main Interface](assets/com.png)
+![stocksTUI Screenshot - CLI Mode](assets/cli.png)
+![stocksTUI Screenshot - FRED Data](assets/fred.png)
 
 ---
 
@@ -88,8 +89,9 @@ A fast, minimalist terminal app for checking stock prices, crypto, news, and his
 *   **Python** 3.10 or newer
 *   **OS Support:**
 
-    *   **Linux / macOS** — Fully supported
-    *   **Windows** — Use **Windows Terminal** with **WSL2**. It *won’t* work in the old `cmd.exe`.
+    *   **Linux** — Release CI covers Python 3.10–3.14.
+    *   **macOS** — Use a modern terminal; not covered by this release’s CI.
+    *   **Windows** — Use Windows Terminal with WSL2; not covered by this release’s CI.
 
 ---
 
@@ -178,9 +180,10 @@ Launch a 5-day chart for Tesla.
 stockstui --history TSLA --period 5d --chart
 ```
 
-Open directly to a specific FRED economic series (e.g., Unemployment Rate).
+Open the FRED tab with your configured economic series. Add series such as
+`UNRATE` under **Configs > FRED Settings**; `--fred` takes no series argument.
 ```bash
-stockstui --fred UNRATE
+stockstui --fred
 ```
 
 CLI mode: Output "stocks" list, filtered by the "tech" tag.
@@ -194,7 +197,7 @@ stockstui -o stocks --tags tech
 
 To use the Economic Data (FRED) features, you must provide a free API key from the Federal Reserve Bank of St. Louis.
 
-1.  Create a free account and request an API key at [fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/fred/v2/index.html).
+1.  Create a free account and request an API key at [fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html).
 2.  Once you have your key, enter it in the app under **Configs > FRED Settings**.
 3.  Click **Save** to enable FRED data fetching.
 
@@ -210,8 +213,8 @@ To use the Economic Data (FRED) features, you must provide a free API key from t
 Want to try the bleeding-edge version or contribute?
 
 ```bash
-git clone https://github.com/andriy-git/stocksTUI.git
-cd stocksTUI
+git clone https://github.com/8kgchymjf6-lgtm/stockstui-enhanced.git
+cd stockstui-enhanced
 ./install.sh
 ```
 
@@ -236,5 +239,5 @@ Set `STOCKSTUI_PYTHON=/path/to/python` to choose an environment explicitly.
 
 ## ⚖️ License
 
-Licensed under the **GNU GPL v3.0**.
-See `LICENSE` for the legalese.
+Licensed under the **GNU GPL v3.0 or later**.
+See [LICENSE](LICENSE) and [credits](docs/CREDITS.md).

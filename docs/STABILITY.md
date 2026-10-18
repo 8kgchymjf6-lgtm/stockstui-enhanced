@@ -4,14 +4,22 @@ Updated: 2026-10-18. Enhanced release: `v1.0.4-enhanced`.
 Package version: `1.0.4`, based on upstream b14.
 
 The release promotes local stability build `0.1.0b14+enhanced.20261018.4`.
-Production Python files and package resources are byte-identical to that fully
-measured build. Release preparation updates version metadata/documentation and
+Production Python files and package resources at the published release tag are
+byte-identical to that fully measured build. Release preparation updates version metadata/documentation and
 makes one UTC timestamp assertion portable to Python 3.10, retaining its exact
 expected value. Historical build results below retain their original scope.
 
-GitHub Actions runs critical Ruff, full-package mypy and the coverage-gated suite
-on Python 3.10–3.14. The associated workflow run records the actual outcome of
-that remote matrix; local results below describe Linux/Python 3.14 only.
+The published release passed critical Ruff, full-package mypy and the complete
+coverage-gated suite on **Python 3.10–3.14** in
+[GitHub Actions run 39138313029](https://github.com/8kgchymjf6-lgtm/stockstui-enhanced/actions/runs/39138313029).
+Each job ran 924 tests with two expected live skips. The local Linux/Python 3.14
+measurement was **922 passed, 2 skipped, 92.31% combined statement/branch coverage**.
+Release provenance, artifact integrity and installed-package checks are recorded
+in [VALIDATION.md](VALIDATION.md); current commands are in [TESTING.md](TESTING.md).
+
+The `.1`–`.4` sections below are historical pre-release records. Their statements
+about unpublished builds and unrun remote checks describe those earlier stages,
+not the published 1.0.4 release.
 
 ## Completed audit
 
@@ -147,7 +155,7 @@ style-only Ruff findings are also not part of the critical lint gate.
   original labels and generate a bounded number of finite axis ticks. A previously
   overflowing loop could otherwise keep adding to an infinite upper bound.
 
-## Latest local validation (.4)
+## Pre-release local validation (.4; historical)
 
 The complete unchanged-source suite ran 924 tests: 922 passed and 2
 opt-in live checks were skipped. All test modules were measured in four isolated
@@ -165,7 +173,7 @@ unchanged. Older candidate failures are retained in the task's log archive.
 Other Python versions and remote CI were not run. These checks do not prove
 universal absence of defects. No public release was published.
 
-## Previous local validation (.3)
+## Historical local validation (.3)
 
 The complete suite ran 912 tests against unchanged source: 910 passed and
 2 opt-in live tests were skipped. All modules were measured in four isolated
@@ -187,7 +195,7 @@ pipx metadata identifies the new local version. No public release was published.
 The earlier candidate's overlap-starvation failure and superseded full-run results
 are retained as intermediate evidence, rather than presented as final validation.
 
-## Previous local validation (.2)
+## Historical local validation (.2)
 
 The complete suite discovered 890 tests: 888 passed and two opt-in live tests
 were skipped. Both live tests also passed in a separate run against the public
@@ -214,7 +222,7 @@ and source (49 Python files). All 40 other distribution versions, the launcher
 and the four personal JSON files were unchanged. Dependency compatibility passed,
 and pipx's package-version metadata matches the installed local build.
 
-## Previous local validation (.1)
+## Historical local validation (.1)
 
 The complete coverage-gated run on Linux/Python 3.14.4 discovered 829 tests:
 827 passed and two opt-in live tests were skipped. Combined statement/branch
@@ -227,8 +235,8 @@ checks passed. The tested runtime versions were preserved during installation.
 ```bash
 ./install.sh --dev
 ./run_tests.sh
-.venv/bin/mypy stockstui
-.venv/bin/ruff check stockstui tests --select=E9,F63,F7,F82
+.venv/bin/python -m mypy stockstui
+.venv/bin/python -m ruff check stockstui tests --select=E9,F63,F7,F82
 ```
 
 For the validated Linux/Python 3.14 versions, install the checkout with
@@ -247,5 +255,7 @@ provider uptime or absence of every possible future defect.
 After validation, install the local wheel with `--no-deps` into the existing
 pipx environment. Preserve runtime dependency versions and personal JSON files.
 Restart running stocksTUI windows after installation to load all changed code.
-The task outputs retain the preceding source backup and wheel for rollback.
+Retain the preceding source backup, wheel and user data for rollback. The SQLite
+database also stores option positions; do not delete it as disposable cache.
+See [MAINTENANCE.md](MAINTENANCE.md#backups-and-recovery) for backup locations.
 Never restore older personal configuration over newer edits without comparison.

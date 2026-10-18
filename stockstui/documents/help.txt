@@ -3,7 +3,7 @@ NAME
 
 SYNOPSIS
     stockstui [OPTIONS]
-    stockstui [VIEW_OPTION] [TICKER(S)]
+    stockstui [--history [TICKER] | --news [TICKER(S)] | --options [TICKER]]
     stockstui -o, --output [LISTS] [--session-list ...]
 
 DESCRIPTION
@@ -45,10 +45,10 @@ OPTIONS
         Start on the Options tab. If TICKER is provided, options data for
         that symbol will be loaded. If omitted, the view will be empty.
 
-    --fred [SERIES_ID]
-        Start on the Economic Data (FRED) tab. If SERIES_ID is provided,
-        data for that FRED series will be loaded. If omitted, the view
-        will show configured series.
+    --fred
+        Start on the Economic Data (FRED) tab with configured series.
+        This flag takes no series argument. Manage the series list under
+        Configs > FRED Settings.
 
     --debug
         Start on the Debug tab, which provides tools for testing API latency
@@ -62,7 +62,7 @@ OPTIONS
 
     -o, --output [LISTS]
         Output data directly to the terminal without launching the TUI.
-        If no LISTS are provided, all tickers from all configured lists
+        If no LISTS are provided, tickers from all visible configured lists
         are displayed. LISTS can be a single watchlist name or a comma-
         separated list of names (e.g., stocks,crypto,fred).
         The 'fred' option will output economic data from the Federal Reserve
@@ -75,8 +75,8 @@ OPTIONS
         Example: stockstui -o --session-list mylist=AAPL,MSFT
 
     --tags TAG1,TAG2,...
-        Filter watchlists or CLI output to only show tickers possessing
-        one or more of the specified tags.
+        Filter CLI output to only show tickers possessing one or more of
+        the specified tags. Use f inside the TUI to filter a watchlist.
         Example: stockstui -o stocks --tags tech,ai
 
     --period {1d,5d,1mo,6mo,ytd,1y,5y,max}
@@ -93,7 +93,7 @@ KEYBINDINGS
       ?             Toggle the built-in, context-aware help screen.
       q / Z         Quit the application.
       r             Refresh data for the currently visible tab.
-      R (Shift+R)   Force a refresh for all symbols across all watchlists.
+      R (Shift+R)   Force a refresh of the currently visible data/view.
       f             Toggle the tag filter view on a watchlist tab.
       1-9, 0        Switch directly to the corresponding tab.
 
@@ -108,13 +108,16 @@ KEYBINDINGS
       Backspace     Navigate back in the Configs tab. Does not interfere with text input.
       [ / ]         Cycle between expiration dates (Options View).
       p             Manage position for selected option contract.
-      c             Toggle between chart and table view (Options/History).
+      c             Toggle the options open-interest chart.
+                    In History, use the Chart switch to change display mode.
 
     Table Interaction
       i             Focus the primary input or table in the current view.
-      e             Edit the selected ticker alias/note (Price View) or FRED series.
-      o             Open the selected ticker/series in the web browser.
-      n / h / O     Quick-switch to News, History, or Options for selected ticker.
+      e / Enter     Edit the selected ticker alias/note (Price View).
+      e             Edit the selected FRED series (FRED View).
+      o             Enter Open Mode for the selected ticker (Price View).
+                    Then n = News, h = History, o = Options, y = Yahoo Finance.
+                    Esc cancels Open Mode.
       /             Search the currently visible table (Price, Config, Debug).
       Ctrl+C        Copy the currently selected text to the system clipboard.
 
@@ -123,7 +126,7 @@ KEYBINDINGS
         c           Sort by Change (Price View) / Close (History View).
         p, e, t     Sort by Price, % Change, or Ticker (Price View only).
         o, H, L, v  Sort by Open, High, Low, or Volume (History View only).
-        u           Restore original view (clears sorting and search filters).
+        u           Restore original view and clear search filters (Price View).
 
     News View
       Tab           Cycle focus to the next news article link.
@@ -142,17 +145,34 @@ CONFIGURATION
     Cache and log files are located in the standard user cache directory
     (e.g., `~/.cache/stockstui/` on Linux).
 
-    - `app_cache.db`: A SQLite database used to cache price and ticker metadata.
+    - `app_cache.db`: A SQLite database containing cached price/ticker metadata
+      AND user-entered option positions.
     - `stockstui.log`: A debug log file.
 
-    These files can be safely deleted to reset caches or configuration.
+    Close all application instances before backing up or restoring user data.
+    Back up configuration files and the SQLite database, including any remaining
+    -wal/-shm sidecar files. Deleting configuration removes personal watchlists
+    and settings; deleting the database also removes tracked option positions.
+    Logs can be regenerated, but retain them when diagnosing a problem.
+
+    Invalid configuration originals are preserved and writes to affected files
+    are blocked. Repair or restore them while the application is closed, then
+    restart. Retain recovery copies and pending transaction journals until the
+    recovery issue is understood; do not delete them to bypass protection.
+
+LAST REFRESH
+    The compact Last Refresh time belongs to the active tab. It records a known
+    fetch time, not necessarily the market time of the displayed quote or bar.
+    Hover the status for details about cached/unverified data and timestamps.
+    Unknown means no fetch timestamp is known; it does not itself prove a failed
+    provider request. A successful refresh records a new fetch timestamp.
 
 FRED API KEY
     To use the Economic Data (FRED) features, you must provide a free API key 
     from the Federal Reserve Bank of St. Louis. 
 
     You can request a free API key at:
-    https://fred.stlouisfed.org/docs/api/fred/v2/index.html
+    https://fred.stlouisfed.org/docs/api/api_key.html
 
     Once obtained, enter the key in the application under Configs > FRED Settings.
 
@@ -162,7 +182,7 @@ PRICE COLUMNS
 
     - Description: User-defined alias or the company's long name
     - Price: The last known market price
-    - Change: Dollar amount change from the previous day's close
+    - Change: Price change from the previous day's close, in the quote currency
     - % Change: Percentage change from the previous day's close
     - Day's Range: The low and high price for the current trading day
     - 52-Wk Range: The low and high price over the last 52 weeks
@@ -208,7 +228,7 @@ FRED COLUMNS
     - Roll-12: 12-month rolling average for trend analysis
     - Roll-24: 24-month rolling average for trend analysis
     - Z-10Y: Z-score relative to the 10-year average, indicating how current
-             values compare to long-term trends (values >2 or <-2 are significant)
+             values compare to the series' long-term mean in standard deviations
     - 10Y Min: 10-year historical minimum value
     - 10Y Max: 10-year historical maximum value
     - % Range: Percentage position within the 10-year range

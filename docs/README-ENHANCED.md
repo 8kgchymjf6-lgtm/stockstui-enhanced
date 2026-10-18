@@ -1,96 +1,49 @@
-# StockSTUI Enhanced
+# stocksTUI Enhanced
 
-StockSTUI Enhanced is a locally maintained enhanced edition of the open-source
-project **stocksTUI**.
+This independently maintained fork of
+[andriy-git/stocksTUI](https://github.com/andriy-git/stocksTUI) combines the original
+sorting and formatting enhancements with configuration, quote/cache, worker and
+interface stability fixes. Upstream history, attribution and licensing are retained.
 
-The enhanced edition is based on upstream release **v0.1.0-b14** and contains a
-carefully maintained collection of improvements to usability, sorting
-behaviour, financial-data presentation and application robustness while
-preserving compatibility with the upstream project.
+## Current release
 
----
+- Repository: [stockstui-enhanced](https://github.com/8kgchymjf6-lgtm/stockstui-enhanced)
+- Release: [v1.0.4-enhanced](https://github.com/8kgchymjf6-lgtm/stockstui-enhanced/releases/tag/v1.0.4-enhanced)
+- Package version: **1.0.4**; upstream base: **v0.1.0-b14**.
+- Default branch: **main**.
+- License: [GNU GPL v3.0 or later](../LICENSE).
 
-# Base information
+## Changes since 1.0.3
 
-Upstream project:
+Atomic configuration and watchlist saves, protected recovery, synchronized quote
+and SQLite updates, stale-response protection, refresh retries, literal user
+labels, search/filter/sort corrections and the compact per-tab Last Refresh
+status are included. Options, FRED, input/navigation and chart edge cases also
+have regression coverage. See the [complete release highlights](CHANGELOG-ENHANCED.md#v104-enhanced).
 
-- `andriy-git/stocksTUI`
+The original three-file enhancement description is historical; subsequent
+maintenance spans providers, configuration, persistence, views and tests.
 
-Base release:
+## Validation
 
-- `v0.1.0-b14`
+Local Linux/Python 3.14 checks: **922 tests passed, 2 optional live checks skipped**,
+with **92.31% combined statement/branch coverage**. The complete release CI also
+passed on **Python 3.10–3.14**. Coverage is not a reliability percentage; full
+provenance and limits are recorded in [VALIDATION.md](VALIDATION.md).
 
-Enhanced release:
+## Documentation
 
-- `v1.0.4-enhanced`
+- [Installation and examples](../README.md)
+- [Enhanced changelog](CHANGELOG-ENHANCED.md)
+- [Technical overview](TECHNICAL-OVERVIEW.md)
+- [Release validation](VALIDATION.md)
+- [Testing commands and quality gates](TESTING.md)
+- [Detailed stability audit and historical results](STABILITY.md)
+- [Maintenance, backups and releases](MAINTENANCE.md)
+- [Full source user manual](../stockstui/documents/help.txt)
+- [Credits and license](CREDITS.md)
+- [Original upstream changelog](../CHANGELOG.md)
 
-Package version:
-
-- `1.0.4` (enhanced release based on upstream b14)
-- Validation and recovery notes: [STABILITY.md](STABILITY.md)
-
-Default branch:
-
-- `main`
-
-License:
-
-- GNU General Public License v3.0 or later (`GPL-3.0-or-later`)
-
----
-
-# Project purpose
-
-The purpose of the enhanced edition is to improve the original application
-without changing its overall architecture or moving away from the upstream
-project.
-
-The enhanced edition therefore focuses on carefully selected improvements while
-keeping source-code modifications limited and maintainable.
-
----
-
-# Main enhancements
-
-The enhanced edition includes improvements in the following areas:
-
-- Table sorting
-- History sorting
-- Financial-data formatting
-- Numeric sorting
-- Market-data handling
-- User-interface behaviour
-- Defensive programming
-- Overall application robustness
-
-The original enhancement touched the main application, formatter and market
-provider. Subsequent stability work also covers configuration, SQLite persistence,
-other providers and views. Current scope, validation and recovery are documented
-in [STABILITY.md](STABILITY.md); the original three-file description is historical.
-
----
-
-# Documentation
-
-Additional documentation is available in:
-
-- `CHANGELOG-ENHANCED.md`
-- `TECHNICAL-OVERVIEW.md`
-- `VALIDATION.md`
-- `TESTING.md`
-- `MAINTENANCE.md`
-- `CREDITS.md`
-
----
-
-# Attribution
-
-The enhanced edition preserves:
-
-- Original project attribution
-- Original project structure
-- Original licensing
-- Compatibility with future upstream development wherever practical
-
-The original upstream project remains available through its own repository and
-documentation.
+The release tag records the published source; `main` also contains subsequent
+documentation corrections. A frozen release wheel retains the manual packaged
+when it was built.
