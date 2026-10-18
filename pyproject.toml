@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stocksTUI"
-version = "0.1.0b14+enhanced.20261018.4"
+version = "1.0.4"
 authors = [
   { name="Andriy", email="project-git@techie.com" },
 ]
@@ -64,8 +64,8 @@ exclude = ["venv", ".venv", "build", "dist"]
 
 
 [project.urls]
-"Homepage" = "https://github.com/andriy-git/stocksTUI"
-"Bug Tracker" = "https://github.com/andriy-git/stocksTUI/issues"
+"Homepage" = "https://github.com/8kgchymjf6-lgtm/stockstui-enhanced"
+"Bug Tracker" = "https://github.com/8kgchymjf6-lgtm/stockstui-enhanced/issues"
 
 [project.scripts]
 stockstui = "stockstui.main:main"

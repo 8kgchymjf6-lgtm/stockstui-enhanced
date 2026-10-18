@@ -8,6 +8,56 @@ The original upstream project history remains available in the repository's
 
 ---
 
+# v1.0.4-enhanced
+
+Release date: 2026-10-18. Package version: `1.0.4`.
+Based on upstream `v0.1.0-b14`; follows `v1.0.3-enhanced`.
+
+A stability and data-integrity release incorporating the complete watchlist/
+quote audit and subsequent failure-path reviews.
+
+## Fixed
+
+- Save JSON configuration atomically, merge independent concurrent edits and
+  recover interrupted multi-file watchlist changes. Failed saves roll back;
+  structurally damaged originals are preserved and protected from overwriting.
+- Serialize SQLite operations and retain newer quote snapshots, expiry times,
+  split-adjusted units and market metadata across save/restart. Add-to-all
+  portfolio changes commit together, and portfolio timestamps use actual UTC.
+- Reject obsolete worker results without starving completed quote updates;
+  recover loading states after failure/cancellation and allow refresh retries
+  in prices, history, news, options and FRED.
+- Keep search, sorting, tags and editing aligned with the active list and current
+  price snapshot. Treat aliases/list names as literal text in widgets and CLI.
+- Separate fetch times from quote/bar times, retain the compact Last Refresh
+  line, scope it to the active tab and display unknown market status accurately.
+- Normalize invalid numbers and partial provider frames; retain usable quotes
+  after optional metadata failures. Handle missing option fields and underlying
+  prices without fabricated values or HTTP requests during rendering.
+- Bound and scale history/open-interest chart arithmetic, retain currencies and
+  readable labels, and handle partial/empty frames and extreme finite values.
+- Complete ticker suggestions, Enter editing, empty-table guards and Vim radio
+  navigation. Correct expiration-day display and FRED leap-year comparisons.
+- Preserve logs during help/version calls and safely dispatch worker-thread
+  notifications; detach the handler on exit.
+
+## Validation and maintenance
+
+- Local complete suite: **924 tests: 922 passed, 2 optional live checks skipped**.
+- Local combined statement/branch coverage: **92.31%**, enforced minimum **80%**.
+- **118 regression tests** also passed against the installed stability build.
+- Full-package mypy, critical Ruff, shell syntax and whitespace checks passed.
+- Preserve runtime dependency versions and personal JSON files during the local
+  upgrade. Record the validated Linux/Python 3.14 constraints separately.
+- Harden installation/test scripts and enforce test and coverage failure statuses.
+  GitHub CI covers Python 3.10–3.14; its workflow run records the matrix result.
+
+The release preparation changes metadata/documentation only after the measured
+local build. Passing tests and coverage do not guarantee absence of all defects.
+See [STABILITY.md](STABILITY.md) for details and historical local validation.
+
+---
+
 # v1.0.3-enhanced
 
 Release date:
@@ -221,8 +271,7 @@ The enhanced edition preserves:
 
 # Summary
 
-Compared with upstream release `v0.1.0-b14`, StockSTUI Enhanced introduces a
-carefully maintained collection of usability improvements, sorting
-enhancements, financial-data formatting improvements, defensive programming
-improvements and project documentation while intentionally limiting source-code
-changes to three Python files.
+The initial `v1.0.0-enhanced` changes were limited to three Python files.
+Subsequent releases extend regression coverage and stability improvements across
+configuration, persistence, providers, widgets and the main application.
+Current scope and validation are recorded in [STABILITY.md](STABILITY.md).

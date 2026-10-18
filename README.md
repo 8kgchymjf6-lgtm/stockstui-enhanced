@@ -1,7 +1,7 @@
-# stocksTUI
+# stocksTUI Enhanced
 > **Note**
 >
-> This repository contains a locally maintained enhanced edition of
+> This repository contains an independently maintained enhanced edition of
 > **stocksTUI**.
 >
 > Additional enhanced documentation is available in the
@@ -14,6 +14,22 @@
 > - Maintenance
 > - Credits
 > - Enhanced changelog
+
+## Version 1.0.4
+
+[Release notes](docs/CHANGELOG-ENHANCED.md#v104-enhanced) ·
+[Validation and recovery](docs/STABILITY.md) ·
+[Download v1.0.4](https://github.com/8kgchymjf6-lgtm/stockstui-enhanced/releases/tag/v1.0.4-enhanced)
+
+This release strengthens quote/cache integrity, watchlist and configuration
+persistence, asynchronous refresh recovery, and handling of partial provider data.
+It also fixes keyboard, FRED, options and chart edge cases while retaining the
+compact `Last Refresh` status line.
+
+Local Linux/Python 3.14 validation: **922 tests passed, 2 optional live checks
+skipped; 92.31% combined statement/branch coverage**. Test coverage is not a
+percentage guarantee of reliability. GitHub Actions also runs the supported
+Python 3.10–3.14 matrix; check the workflow status for the selected commit.
 
 ---
 
@@ -101,10 +117,20 @@ python3 -m pipx ensurepath
 ### 2. Install stocksTUI:
 
 ```bash
-pipx install stocksTUI
+pipx install "git+https://github.com/8kgchymjf6-lgtm/stockstui-enhanced.git@v1.0.4-enhanced"
 ```
 
-Done. You can now run `stockstui` from anywhere.
+The package version and `stockstui --version` are `1.0.4`. This installs the
+enhanced fork explicitly from its release tag.
+
+To replace an existing stocksTUI installation with this release:
+
+```bash
+pipx install --force "git+https://github.com/8kgchymjf6-lgtm/stockstui-enhanced.git@v1.0.4-enhanced"
+```
+
+Personal configuration is stored outside the package. Keep a backup and restart
+running stocksTUI windows after upgrading. You can now run `stockstui` from anywhere.
 
 ---
 

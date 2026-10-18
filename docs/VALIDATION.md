@@ -1,3 +1,7 @@
+> Current release: **v1.0.4-enhanced**, package **1.0.4**. Current validation,
+> platform limits and recovery guidance are in [STABILITY.md](STABILITY.md).
+> The record below is historical validation of the initial v1.0.0-enhanced release.
+
 # Validation - StockSTUI Enhanced
 
 This document records the validation performed for the enhanced edition of

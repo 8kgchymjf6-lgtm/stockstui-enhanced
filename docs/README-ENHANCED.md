@@ -22,11 +22,11 @@ Base release:
 
 Enhanced release:
 
-- `v1.0.0-enhanced`
+- `v1.0.4-enhanced`
 
-Current local stability build:
+Package version:
 
-- `0.1.0b14+enhanced.20261018.4` (upstream b14; no public release published)
+- `1.0.4` (enhanced release based on upstream b14)
 - Validation and recovery notes: [STABILITY.md](STABILITY.md)
 
 Default branch:
