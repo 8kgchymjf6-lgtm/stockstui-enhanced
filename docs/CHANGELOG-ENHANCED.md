@@ -10,52 +10,74 @@ The original upstream project history remains available in the repository's
 
 # v1.0.4-enhanced
 
-Release date: 2026-10-18. Package version: `1.0.4`.
-Based on upstream `v0.1.0-b14`; follows `v1.0.3-enhanced`.
+Release date:
 
-A stability and data-integrity release incorporating the complete watchlist/
-quote audit and subsequent failure-path reviews.
+- 2026-10-18
 
-## Fixed
+Base release:
 
-- Save JSON configuration atomically, merge independent concurrent edits and
-  recover interrupted multi-file watchlist changes. Failed saves roll back;
-  structurally damaged originals are preserved and protected from overwriting.
-- Serialize SQLite operations and retain newer quote snapshots, expiry times,
-  split-adjusted units and market metadata across save/restart. Add-to-all
-  portfolio changes commit together, and portfolio timestamps use actual UTC.
-- Reject obsolete worker results without starving completed quote updates;
-  recover loading states after failure/cancellation and allow refresh retries
-  in prices, history, news, options and FRED.
-- Keep search, sorting, tags and editing aligned with the active list and current
-  price snapshot. Treat aliases/list names as literal text in widgets and CLI.
-- Separate fetch times from quote/bar times, retain the compact Last Refresh
-  line, scope it to the active tab and display unknown market status accurately.
-- Normalize invalid numbers and partial provider frames; retain usable quotes
-  after optional metadata failures. Handle missing option fields and underlying
-  prices without fabricated values or HTTP requests during rendering.
-- Bound and scale history/open-interest chart arithmetic, retain currencies and
-  readable labels, and handle partial/empty frames and extreme finite values.
-- Complete ticker suggestions, Enter editing, empty-table guards and Vim radio
-  navigation. Correct expiration-day display and FRED leap-year comparisons.
-- Preserve logs during help/version calls and safely dispatch worker-thread
-  notifications; detach the handler on exit.
+- stocksTUI v0.1.0-b14
 
-## Validation and maintenance
+Previous enhanced release:
 
-- Local complete suite: **924 tests: 922 passed, 2 optional live checks skipped**.
-- Local combined statement/branch coverage: **92.31%**, enforced minimum **80%**.
-- **118 regression tests** also passed against the installed stability build.
+- v1.0.3-enhanced
+
+Package version:
+
+- 1.0.4
+
+Release type:
+
+- Stability, data integrity, and maintenance release
+
+Maintenance release focused on quote integrity, safe watchlist storage, and reliable refresh recovery.
+
+## Highlights
+
+- Added atomic configuration saves, rollback and recovery of interrupted watchlist changes, with protection against overwriting damaged original files
+- Fixed concurrent quote and SQLite cache updates, including stale responses and incorrect figures after stock splits, saves, and restarts
+- Improved refresh retries and loading-state recovery across prices, history, news, options, and FRED; outdated results no longer replace the active selection
+- Fixed watchlist search, sorting, tag filtering, and editing; aliases and list names now render literally in the interface and terminal output
+- Restored the compact Last Refresh display, kept timestamps specific to the active tab, and separated fetch times from quote and bar times
+- Improved handling of partial provider responses and invalid numbers, and prevented history and open-interest charts from failing or hanging on extreme data
+- Fixed ticker completion, Enter editing, Vim navigation, empty-table actions, option expiration-day display, and FRED leap-year comparisons
+- Expanded regression coverage to 922 passing tests with 2 expected skips and 92.31% total statement/branch coverage; CI passes on Python 3.10–3.14
+
+## Additional fixes and maintenance
+
+- Adding a ticker to every portfolio now commits as one atomic operation;
+  failed writes roll back the complete operation. Portfolio timestamps use UTC.
+- Ticker metadata retains quote type and pre/post-market support after restart.
+  Existing SQLite tables migrate without deleting their rows.
+- Help, version and manual calls preserve diagnostic logs. Notifications are
+  dispatched on the correct thread, and the handler is detached on exit.
+- Installation scripts preserve existing launchers and resolve the project path.
+  Test scripts isolate personal configuration, require coverage by default and
+  preserve failure exit statuses. CI enforces the coverage threshold.
+- Package metadata, installation instructions and project links identify this
+  enhanced edition as version 1.0.4. Upstream attribution and licensing remain.
+
+## Release verification
+
+- Complete local suite: **924 tests: 922 passed, 2 optional live checks skipped**.
+- Local combined statement/branch coverage: **92.31%**, minimum **80%**.
+- Main Textual application statement/branch coverage: **84.48%**.
+- **118 regression tests** passed against the installed 1.0.4 package.
 - Full-package mypy, critical Ruff, shell syntax and whitespace checks passed.
-- Preserve runtime dependency versions and personal JSON files during the local
-  upgrade. Record the validated Linux/Python 3.14 constraints separately.
-- Harden installation/test scripts and enforce test and coverage failure statuses.
-  GitHub CI covers Python 3.10–3.14; its workflow run records the matrix result.
+- [GitHub CI](https://github.com/8kgchymjf6-lgtm/stockstui-enhanced/actions/runs/39138313029)
+  passed on Python **3.10, 3.11, 3.12, 3.13 and 3.14**, running the complete
+  **924-test suite** with two opt-in live checks skipped and enforcing the
+  coverage gate on every version.
+- One UTC timestamp assertion was made portable to Python 3.10 without changing
+  its expected instant; the complete GitHub matrix passed after this adjustment.
+- The release wheel was downloaded from GitHub and verified against its SHA-256
+  checksum. The local upgrade preserved all 40 other dependency versions, the
+  launcher and the four personal JSON files.
 
-The release preparation changes metadata/documentation and makes one UTC timestamp
-assertion compatible with Python 3.10. Production code is unchanged from the
-measured local build. Passing tests and coverage do not guarantee absence of all defects.
-See [STABILITY.md](STABILITY.md) for details and historical local validation.
+These changes promote the measured local stability build; the production code
+is unchanged by release preparation. Coverage is a measure of testing and does
+not guarantee absence of every defect. See [STABILITY.md](STABILITY.md) for
+validation details, platform scope and recovery guidance.
 
 ---
 
