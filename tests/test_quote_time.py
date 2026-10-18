@@ -155,11 +155,8 @@ class TestQuoteUI(unittest.IsolatedAsyncioTestCase):
             with patch.object(label, "update", wraps=label.update) as update:
                 StocksTUI._show_quote_status(pilot.app, StocksTUI._quote_status(rows), rows)
                 compact = update.call_args.args[0].plain
-                self.assertLessEqual(len(compact), 64)
-                self.assertIn("Quote:", compact)
-                self.assertIn("Fetch:", compact)
-                self.assertIn("Unverified: 1", compact)
-                self.assertNotIn("AAPL", compact)
+                expected_time = datetime.fromisoformat(STAMP).astimezone().strftime("%H:%M:%S")
+                self.assertEqual(compact, f"Last Refresh: {expected_time}")
             tip = label.tooltip.plain
             for text in ("AAPL: quote", "BTC-USD: 1m bar starts", "MISSING: quote time unknown", "fetched", "cached/unverified"):
                 self.assertIn(text, tip)

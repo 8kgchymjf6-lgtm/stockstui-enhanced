@@ -2779,27 +2779,18 @@ class StocksTUI(App):
         label = self.query_one("#last-refresh-time", Label)
         details = []
         fetch_times = []
-        quote_times = []
-        unverified = 0
         for row in data or []:
             fetched = parse_quote_time(row.get("_fetched_at"))
             if fetched:
                 fetch_times.append(fetched)
-            quote = parse_quote_time(row.get("_quote_at"))
-            if quote and row.get("_quote_time_kind") in ("quote", "bar_start"):
-                quote_times.append(quote)
-            unverified += bool(row.get("_stale", True))
             fetched_text = fetched.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z") if fetched else "unknown"
             state = "; cached/unverified" if row.get("_stale", True) else ""
             details.append(f"{row.get('symbol', '?')}: {format_quote_time(row)}; fetched {fetched_text}{state}")
-        # Keep the status bar short; full dates, sources and symbols stay in the tooltip.
+        # Preserve the original status-bar appearance; details stay in the tooltip.
         display_text = text
         if data is not None:
-            quote_text = min(quote_times).astimezone().strftime("%d/%m %H:%M") if quote_times else "unknown"
-            fetch_text = min(fetch_times).astimezone().strftime("%H:%M:%S") if fetch_times else "unknown"
-            display_text = f"Quote: {quote_text} | Fetch: {fetch_text}"
-            if unverified:
-                display_text += f" | Unverified: {unverified}"
+            fetch_text = min(fetch_times).astimezone().strftime("%H:%M:%S") if fetch_times else "Unknown"
+            display_text = f"Last Refresh: {fetch_text}"
         label.update(Text(display_text))
         label.tooltip = Text(text + ("\n" + "\n".join(details) if details else ""))
 
