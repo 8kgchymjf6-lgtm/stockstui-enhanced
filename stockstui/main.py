@@ -48,6 +48,7 @@ from rich.style import Style
 from textual.color import Color
 from platformdirs import PlatformDirs
 
+from stockstui.quote_time import parse_quote_time, format_quote_time
 from stockstui.config_manager import ConfigManager, ConfigSaveError
 from stockstui.common import (
     PriceDataUpdated,
@@ -1311,7 +1312,7 @@ class StocksTUI(App):
                     self._style_and_populate_price_table(price_table, rows)
                     self._apply_price_table_sort()
                     self._refresh_search_snapshot(price_table)
-                    self._show_quote_status(self._quote_status(cached_data))
+                    self._show_quote_status(self._quote_status(cached_data), cached_data)
                 else:
                     price_table.clear()
                     price_table.loading = True
@@ -1941,7 +1942,7 @@ class StocksTUI(App):
 
             self._apply_price_table_sort()
             self._refresh_search_snapshot(dt)
-            self._show_quote_status(now_str)
+            self._show_quote_status(now_str, message.data)
 
             if self._pre_refresh_cursor_key:
                 try:
@@ -2774,10 +2775,16 @@ class StocksTUI(App):
         except NoMatches:
             self.bell()
 
-    def _show_quote_status(self, text):
+    def _show_quote_status(self, text, data=None):
         label = self.query_one("#last-refresh-time", Label)
-        label.update(text)
-        label.tooltip = text
+        label.update(Text(text))
+        details = []
+        for row in data or []:
+            fetched = parse_quote_time(row.get("_fetched_at"))
+            fetched_text = fetched.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z") if fetched else "unknown"
+            state = "; cached/unverified" if row.get("_stale", True) else ""
+            details.append(f"{row.get('symbol', '?')}: {format_quote_time(row)}; fetched {fetched_text}{state}")
+        label.tooltip = Text(text + ("\n" + "\n".join(details) if details else ""))
 
     @staticmethod
     def _quote_status(data):
@@ -2793,7 +2800,23 @@ class StocksTUI(App):
             if row.get("_stale", True):
                 stale.append(row.get("symbol", "?"))
         oldest = min(timestamps).astimezone().strftime("%Y-%m-%d %H:%M:%S") if timestamps else "unknown"
-        text = f"Oldest known fetch: {oldest}"
+        quote_times = {"quote": [], "bar_start": []}
+        unknown = []
+        for row in data:
+            stamp = parse_quote_time(row.get("_quote_at"))
+            kind = row.get("_quote_time_kind")
+            if stamp is not None and kind in quote_times:
+                quote_times[kind].append(stamp)
+            else:
+                unknown.append(str(row.get("symbol", "?")))
+        parts = []
+        for kind, title in (("quote", "Oldest quote"), ("bar_start", "Oldest 1m bar start")):
+            if quote_times[kind]:
+                parts.append(f"{title}: {min(quote_times[kind]).astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        if unknown:
+            parts.append(f"Quote time unknown: {len(unknown)}")
+        parts.append(f"Oldest known fetch: {oldest}")
+        text = "; ".join(parts)
         if stale:
             warning = "cached/unverified: " + ", ".join(stale[:3])
             if len(stale) > 3:
@@ -2999,7 +3022,7 @@ class StocksTUI(App):
             self._style_and_populate_price_table(dt, rows)
             self._apply_price_table_sort()
             self._refresh_search_snapshot(dt)
-            self._show_quote_status(self._quote_status(data_for_table))
+            self._show_quote_status(self._quote_status(data_for_table), data_for_table)
 
             self._is_filter_refresh = False
 

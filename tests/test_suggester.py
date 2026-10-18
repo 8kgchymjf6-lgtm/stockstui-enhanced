@@ -17,7 +17,7 @@ class TestTickerSuggester(unittest.IsolatedAsyncioTestCase):
 
     async def test_prefix_match_ticker(self):
         suggestion = await self.suggester.get_suggestion("AAP")
-        self.assertEqual(suggestion, "L - Apple Inc. - AAPL")
+        self.assertEqual(suggestion, "AAPL - Apple Inc. - AAPL")
 
     async def test_substring_match_description(self):
         suggestion = await self.suggester.get_suggestion("abet")
@@ -37,4 +37,4 @@ class TestTickerSuggester(unittest.IsolatedAsyncioTestCase):
         items_with_overlap = [("TES", "Some Other Company"), ("TSLA", "Tesla, Inc.")]
         suggester_overlap = TickerSuggester(items_with_overlap)
         suggestion = await suggester_overlap.get_suggestion("TES")
-        self.assertEqual(suggestion, " - Some Other Company - TES")
+        self.assertEqual(suggestion, "TES - Some Other Company - TES")

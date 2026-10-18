@@ -55,8 +55,8 @@ class TickerSuggester(Suggester):
                 suggestion_text = (
                     f"{original_ticker} - {original_desc} - {original_ticker}"
                 )
-                # Return the remainder of the string for a clean autocomplete.
-                return suggestion_text[len(value) :]
+                # Textual expects the full replacement value, not its suffix.
+                return suggestion_text
 
         # --- Priority 2: Match within the description for discovery ---
         for i, (_, desc_val) in enumerate(self._for_comparison):

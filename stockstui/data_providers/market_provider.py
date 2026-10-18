@@ -8,6 +8,7 @@ from copy import deepcopy
 from threading import RLock
 import pandas as pd
 from stockstui.utils import merge_price_data
+from stockstui.quote_time import quote_time_fields, replace_quote_time
 
 
 # In-memory cache for storing fetched market data to reduce API calls.
@@ -214,6 +215,7 @@ def get_market_price_data(
                     continue
                 merged = merge_price_data(_price_cache[ticker]["data"], update)
                 if update.get("price") is not None:
+                    replace_quote_time(merged, update)
                     merged["_fetched_at"] = datetime.now(timezone.utc).isoformat()
                     merged["_fetch_failed"] = False
                     _price_cache[ticker]["fetch_failed"] = False
@@ -317,13 +319,19 @@ def _fetch_and_cache_slow_data(tickers: list[str]):
                 if not shares:
                     shares = si.get("sharesOutstanding") or si.get("floatShares")
 
+                # Use a paired regular-market price/time when available. FastInfo's
+                # lastPrice can come from a daily bar and has no matching trade time.
+                regular_price = si.get("regularMarketPrice")
+                price = regular_price or fi.get("lastPrice") or si.get("currentPrice")
+                price_time = quote_time_fields(
+                    si.get("regularMarketTime") if regular_price else None, "quote"
+                )
                 new_data = {
+                    **price_time,
                     "symbol": ticker,
                     "currency": fi.get("currency", si.get("currency", "USD")),
                     "description": si.get("longName", ticker),
-                    "price": fi.get("lastPrice")
-                    or si.get("currentPrice")
-                    or si.get("regularMarketPrice"),
+                    "price": price,
                     "previous_close": si.get("regularMarketPreviousClose")
                     or si.get("previousClose")
                     or fi.get("previousClose")
@@ -341,8 +349,8 @@ def _fetch_and_cache_slow_data(tickers: list[str]):
                  ),
                     "shares": shares,
                     # Fallback to API-reported market cap if price or shares is missing/None
-                    "market_cap": (shares * (fi.get("lastPrice") or si.get("currentPrice") or si.get("regularMarketPrice")))
-                    if shares and (fi.get("lastPrice") or si.get("currentPrice") or si.get("regularMarketPrice"))
+                    "market_cap": shares * price
+                    if shares and price
                     else (fi.get("marketCap") or si.get("marketCap")),
                     "dividend_yield": (
                         si.get("dividendYield") / 100
@@ -363,6 +371,7 @@ def _fetch_and_cache_slow_data(tickers: list[str]):
                     merged_data = new_data
 
                 if new_data.get("price") is not None:
+                    replace_quote_time(merged_data, new_data)
                     merged_data["_fetched_at"] = datetime.now(timezone.utc).isoformat()
                 _store_price(ticker, {
                     "expiry": exchange_expiry_cache[exchange],
@@ -480,7 +489,8 @@ def _fetch_fast_data(tickers: list[str], prepost: bool = False) -> dict:
                 vol_series = df["Volume"][ticker].dropna()
                 
                 live_prices[ticker] = {
-                    # Last 1-minute close is the most recent trade price.
+                    # The index identifies the bar start, not the last trade.
+                    **quote_time_fields(close_series.index[-1], "bar_start"),
                     "price": float(close_series.iloc[-1]),
                     # Intraday high/low span all bars in the current session.
                     "day_high": float(high_series.max()) if not high_series.empty else None,
